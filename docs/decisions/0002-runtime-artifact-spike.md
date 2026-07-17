@@ -10,8 +10,8 @@ This ADR evaluates only whether one minimal MCP Runtime can run as a self-contai
 
 | Platform | Gate | SEA bytes | Start samples (ms) | OS signing |
 | --- | --- | ---: | --- | --- |
-| darwin-arm64 | pass | 120060448 | 255.92, 249.97, 237.65 | ad-hoc |
-| win32-x64 | pass | 92643328 | 254.02, 242.19, 241.07 | unsigned-test |
+| darwin-arm64 | pass | 120060448 | 458.05, 434.10, 370.03 | ad-hoc |
+| win32-x64 | pass | 92643328 | 1572.81, 1549.06, 1518.16 | unsigned-test |
 
 ## Reasons
 
