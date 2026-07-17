@@ -10,10 +10,17 @@ const signalExitTimeoutMs = 2_000;
 const forcedExitTimeoutMs = 2_000;
 const uncleanExitMessage = "Runtime did not exit cleanly";
 
-interface ExitObservation {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  premature: boolean;
+export interface RuntimeExitObservation {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly premature: boolean;
+}
+
+export class RuntimeTerminationUnobservedError extends Error {
+  constructor(options?: ErrorOptions) {
+    super("Runtime termination was not observed", options);
+    this.name = "RuntimeTerminationUnobservedError";
+  }
 }
 
 export class RuntimeStdioTransport implements Transport {
@@ -23,10 +30,11 @@ export class RuntimeStdioTransport implements Transport {
 
   private readonly readBuffer = new ReadBuffer();
   private readonly stderrStream: PassThrough | null;
-  private readonly finalClosePromise: Promise<ExitObservation>;
-  private resolveFinalClose!: (observation: ExitObservation) => void;
+  private readonly finalClosePromise: Promise<void>;
+  private resolveFinalClose!: () => void;
   private child: ChildProcess | undefined;
-  private exitObservation: ExitObservation | undefined;
+  private observedExit: RuntimeExitObservation | undefined;
+  private observedFinalClose = false;
   private closePromise: Promise<void> | undefined;
   private closeRequested = false;
   private closeNotified = false;
@@ -46,6 +54,18 @@ export class RuntimeStdioTransport implements Transport {
 
   get pid(): number | null {
     return this.child?.pid ?? null;
+  }
+
+  get exitObserved(): boolean {
+    return this.observedExit !== undefined;
+  }
+
+  get finalCloseObserved(): boolean {
+    return this.observedFinalClose;
+  }
+
+  get exitObservation(): Readonly<RuntimeExitObservation> | undefined {
+    return this.observedExit;
   }
 
   async start(): Promise<void> {
@@ -74,12 +94,14 @@ export class RuntimeStdioTransport implements Transport {
         }
         this.onerror?.(error);
       });
-      child.once("close", (code, signal) => {
-        const observation = { code, signal, premature: !this.closeRequested };
-        this.exitObservation = observation;
+      child.once("exit", (code, signal) => {
+        this.observedExit ??= Object.freeze({ code, signal, premature: !this.closeRequested });
+      });
+      child.once("close", () => {
+        this.observedFinalClose = true;
         this.child = undefined;
         this.readBuffer.clear();
-        this.resolveFinalClose(observation);
+        this.resolveFinalClose();
         this.notifyClose();
         if (!startSettled) {
           startSettled = true;
@@ -108,8 +130,15 @@ export class RuntimeStdioTransport implements Transport {
   }
 
   close(): Promise<void> {
-    this.closePromise ??= this.closeOwnedProcess();
-    return this.closePromise;
+    if (this.closePromise !== undefined) return this.closePromise;
+    const attempt = this.closeOwnedProcess();
+    this.closePromise = attempt;
+    void attempt.catch((error: unknown) => {
+      if (error instanceof RuntimeTerminationUnobservedError && this.closePromise === attempt) {
+        this.closePromise = undefined;
+      }
+    });
+    return attempt;
   }
 
   private processReadBuffer(): void {
@@ -126,51 +155,47 @@ export class RuntimeStdioTransport implements Transport {
 
   private async closeOwnedProcess(): Promise<void> {
     this.closeRequested = true;
-    try {
-      const child = this.child;
-      if (child !== undefined && this.exitObservation === undefined) {
-        try {
-          child.stdin?.end();
-        } catch {
-          // Final close observation determines whether shutdown was clean.
-        }
-        if (!(await this.waitForFinalClose(gracefulExitTimeoutMs))) {
-          this.escalated = true;
+    const child = this.child;
+    if (child !== undefined && !this.observedFinalClose) {
+      try {
+        child.stdin?.end();
+      } catch {
+        // Final close observation determines whether shutdown was clean.
+      }
+      if (!(await this.waitForFinalClose(gracefulExitTimeoutMs))) {
+        if (!this.exitObserved) {
           try {
-            child.kill("SIGTERM");
+            if (child.kill("SIGTERM")) this.escalated = true;
           } catch {
             // Continue to the final close observation and forced fallback.
           }
         }
-        if (this.exitObservation === undefined && !(await this.waitForFinalClose(signalExitTimeoutMs))) {
-          this.escalated = true;
+        if (!(await this.waitForFinalClose(signalExitTimeoutMs)) && !this.exitObserved) {
           try {
-            child.kill("SIGKILL");
+            if (child.kill("SIGKILL")) this.escalated = true;
           } catch {
             // The bounded final wait below still proves whether close was observed.
           }
         }
-        if (this.exitObservation === undefined) await this.waitForFinalClose(forcedExitTimeoutMs);
+        if (!this.observedFinalClose) await this.waitForFinalClose(forcedExitTimeoutMs);
       }
+    }
 
-      const observation = this.exitObservation;
-      if (
-        observation === undefined ||
-        observation.premature ||
-        this.escalated ||
-        observation.code !== 0 ||
-        observation.signal !== null
-      ) {
-        throw new Error(uncleanExitMessage);
-      }
-    } finally {
-      this.readBuffer.clear();
-      this.notifyClose();
+    if (!this.observedFinalClose) throw new RuntimeTerminationUnobservedError();
+    const observation = this.observedExit;
+    if (
+      observation === undefined ||
+      observation.premature ||
+      this.escalated ||
+      observation.code !== 0 ||
+      observation.signal !== null
+    ) {
+      throw new Error(uncleanExitMessage);
     }
   }
 
   private waitForFinalClose(timeoutMs: number): Promise<boolean> {
-    if (this.exitObservation !== undefined) return Promise.resolve(true);
+    if (this.observedFinalClose) return Promise.resolve(true);
     return new Promise((resolve) => {
       let settled = false;
       const timer = setTimeout(() => {

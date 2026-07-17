@@ -1,9 +1,13 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { chmod, copyFile, mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { chmod, copyFile, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { verifyRuntimeArtifact, type RuntimeManifest } from "./runtime-manifest.js";
-import { RuntimeStdioTransport } from "./runtime-stdio-transport.js";
+import {
+  RuntimeStdioTransport,
+  RuntimeTerminationUnobservedError,
+} from "./runtime-stdio-transport.js";
 
 export type SupervisorState = "idle" | "starting" | "running" | "stopping" | "failed";
 
@@ -32,6 +36,49 @@ interface RuntimeArtifactInput {
 export interface StagedRuntimeArtifact {
   artifactPath: string;
   cleanup: () => Promise<void>;
+}
+
+function runTextCommand(command: string, args: string[]): Promise<string> {
+  return new Promise((resolveCommand, rejectCommand) => {
+    execFile(command, args, { encoding: "utf8", windowsHide: true }, (error, stdout) => {
+      if (error !== null) rejectCommand(error);
+      else resolveCommand(stdout);
+    });
+  });
+}
+
+function system32Executable(name: "whoami.exe" | "icacls.exe"): string {
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+  if (systemRoot === undefined || !isAbsolute(systemRoot)) {
+    throw new Error("Windows SystemRoot must be absolute");
+  }
+  return join(systemRoot, "System32", name);
+}
+
+async function restrictStagingDirectory(stagingDirectory: string): Promise<void> {
+  if (process.platform !== "win32") {
+    await chmod(stagingDirectory, 0o700);
+    if (((await stat(stagingDirectory)).mode & 0o777) !== 0o700) {
+      throw new Error("Runtime staging directory must have mode 0700");
+    }
+    return;
+  }
+
+  const whoami = system32Executable("whoami.exe");
+  const icacls = system32Executable("icacls.exe");
+  const sidOutput = await runTextCommand(whoami, ["/user", "/fo", "csv", "/nh"]);
+  const sidMatches = sidOutput.match(/\bS-\d+(?:-\d+)+\b/gi) ?? [];
+  if (sidMatches.length !== 1 || sidMatches[0] === undefined) {
+    throw new Error("failed to discover current Windows user SID");
+  }
+  const sid = sidMatches[0];
+  await runTextCommand(icacls, [
+    stagingDirectory,
+    "/inheritance:r",
+    "/grant:r",
+    `*${sid}:(OI)(CI)F`,
+  ]);
+  await runTextCommand(icacls, [stagingDirectory, "/verify"]);
 }
 
 export function validateHealthResult(value: unknown, nonce: string): HealthResult {
@@ -63,7 +110,7 @@ export async function stageRuntimeArtifact(
   };
 
   try {
-    await chmod(stagingDirectory, 0o700);
+    await restrictStagingDirectory(stagingDirectory);
     const stagedPath = join(stagingDirectory, basename(input.artifactPath));
     await copyFile(input.artifactPath, stagedPath);
     await chmod(stagedPath, input.kind === "self-contained" ? 0o500 : 0o400);
@@ -140,7 +187,8 @@ export class RuntimeSupervisor {
       return value;
     } catch (error) {
       this.state = "failed";
-      this.pendingCleanupFailure ??= await this.cleanupOwnedRuntime();
+      const cleanupFailure = await this.cleanupOwnedRuntime();
+      if (cleanupFailure !== undefined) this.pendingCleanupFailure ??= cleanupFailure;
       throw error;
     }
   }
@@ -149,33 +197,58 @@ export class RuntimeSupervisor {
     if (this.state === "idle" && this.pendingCleanupFailure === undefined) return;
     this.state = "stopping";
     const previousFailure = this.pendingCleanupFailure;
-    this.pendingCleanupFailure = undefined;
     const cleanupFailure = await this.cleanupOwnedRuntime();
+    if (this.ownsRuntimeResources()) {
+      const retainedFailure =
+        previousFailure ??
+        cleanupFailure ??
+        new RuntimeTerminationUnobservedError();
+      this.pendingCleanupFailure = retainedFailure;
+      throw retainedFailure;
+    }
     this.state = "idle";
+    this.pendingCleanupFailure = undefined;
     if (previousFailure !== undefined) throw previousFailure;
     if (cleanupFailure !== undefined) throw cleanupFailure;
   }
 
   private async cleanupOwnedRuntime(): Promise<unknown> {
     let failure: unknown;
+    const client = this.client;
+    const transport = this.transport;
     try {
-      await this.client?.close();
+      await client?.close();
     } catch (error) {
       failure = error;
     }
-    try {
-      await this.transport?.close();
-    } catch (error) {
-      failure ??= error;
+    if (transport !== undefined && (client === undefined || transport.finalCloseObserved)) {
+      try {
+        await transport.close();
+      } catch (error) {
+        failure ??= error;
+      }
     }
-    try {
-      await this.stageCleanup?.();
-    } catch (error) {
-      failure ??= error;
+    if (transport !== undefined && !transport.finalCloseObserved) {
+      return failure instanceof RuntimeTerminationUnobservedError
+        ? failure
+        : new RuntimeTerminationUnobservedError(
+            failure === undefined ? undefined : { cause: failure },
+          );
     }
     this.client = undefined;
     this.transport = undefined;
-    this.stageCleanup = undefined;
+    if (this.stageCleanup !== undefined) {
+      try {
+        await this.stageCleanup();
+        this.stageCleanup = undefined;
+      } catch (error) {
+        failure ??= error;
+      }
+    }
     return failure;
+  }
+
+  private ownsRuntimeResources(): boolean {
+    return this.client !== undefined || this.transport !== undefined || this.stageCleanup !== undefined;
   }
 }

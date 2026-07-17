@@ -15,6 +15,7 @@ import {
   validateHealthResult,
   type RuntimeLaunchSpec,
 } from "../src/runtime-supervisor.js";
+import { RuntimeStdioTransport } from "../src/runtime-stdio-transport.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -63,6 +64,48 @@ async function healthArtifact(stubborn = false): Promise<string> {
   );
   return artifactPath;
 }
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not observed before timeout");
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
+  }
+}
+
+it("freezes premature exit before a descendant releases inherited stdio", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "navact-exit-close-gap-"));
+  temporaryDirectories.push(directory);
+  const entryPath = join(directory, "exit-close-gap.mjs");
+  await writeFile(
+    entryPath,
+    [
+      'import { spawn } from "node:child_process";',
+      'const descendant = spawn(process.execPath, ["-e", "setTimeout(() => undefined, 1_500)"], {',
+      '  stdio: ["ignore", "inherit", "inherit"],',
+      "  windowsHide: true,",
+      "});",
+      "descendant.unref();",
+      "",
+    ].join("\n"),
+  );
+  const transport = new RuntimeStdioTransport({
+    command: process.execPath,
+    args: [entryPath],
+    stderr: "pipe",
+  });
+
+  await transport.start();
+  const pid = transport.pid;
+  expect(pid).not.toBeNull();
+  await waitFor(() => transport.exitObserved);
+  expect(transport.pid).toBe(pid);
+  expect(transport.finalCloseObserved).toBe(false);
+  expect(transport.exitObservation).toEqual({ code: 0, signal: null, premature: true });
+  expect(Object.isFrozen(transport.exitObservation)).toBe(true);
+  await expect(transport.close()).rejects.toThrow("Runtime did not exit cleanly");
+  expect(transport.finalCloseObserved).toBe(true);
+});
 
 it("stages signed bytes independently from later source mutation", async () => {
   const directory = await mkdtemp(join(tmpdir(), "navact-stage-source-"));
