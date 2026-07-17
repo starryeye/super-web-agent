@@ -1,9 +1,10 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { ChildProcess } from "node:child_process";
+import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   canonicalManifestPayload,
   verifyRuntimeArtifact,
@@ -12,10 +13,15 @@ import {
 import {
   RuntimeSupervisor,
   stageRuntimeArtifact,
+  validateWindowsAclSnapshot,
   validateHealthResult,
   type RuntimeLaunchSpec,
 } from "../src/runtime-supervisor.js";
-import { RuntimeStdioTransport } from "../src/runtime-stdio-transport.js";
+import {
+  RuntimeStdioTransport,
+  RuntimeTerminationUnobservedError,
+  type RuntimeShutdownDeadlines,
+} from "../src/runtime-stdio-transport.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -72,6 +78,133 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 10));
   }
 }
+
+function transportWithDeadlines(
+  server: ConstructorParameters<typeof RuntimeStdioTransport>[0],
+  shutdownDeadlines: RuntimeShutdownDeadlines,
+): RuntimeStdioTransport {
+  return new RuntimeStdioTransport(server, { shutdownDeadlines });
+}
+
+async function delayedCleanExitArtifact(delayMs: number): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "navact-delayed-exit-"));
+  temporaryDirectories.push(directory);
+  const entryPath = join(directory, "delayed-clean-exit.mjs");
+  await writeFile(entryPath, `process.stdin.resume(); setTimeout(() => process.exit(0), ${String(delayMs)});\n`);
+  return entryPath;
+}
+
+const shortShutdownDeadlines = {
+  gracefulExitTimeoutMs: 100,
+  signalExitTimeoutMs: 100,
+  forcedExitTimeoutMs: 200,
+} satisfies RuntimeShutdownDeadlines;
+
+const lateCleanExitDeadlines = {
+  ...shortShutdownDeadlines,
+  forcedExitTimeoutMs: 1_000,
+} satisfies RuntimeShutdownDeadlines;
+
+it("rejects a code-zero exit that misses the graceful deadline even when kill returns false", async () => {
+  const entryPath = await delayedCleanExitArtifact(300);
+  const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
+  const transport = transportWithDeadlines(
+    { command: process.execPath, args: [entryPath], stderr: "pipe" },
+    lateCleanExitDeadlines,
+  );
+
+  try {
+    await transport.start();
+    await expect(transport.close()).rejects.toThrow("Runtime did not exit cleanly");
+    expect(killSpy).toHaveBeenCalled();
+    expect(transport.exitObservation).toMatchObject({ code: 0, signal: null });
+  } finally {
+    killSpy.mockRestore();
+  }
+});
+
+it("retries an unobserved close and reaps a later final close without accepting it as clean", async () => {
+  const entryPath = await delayedCleanExitArtifact(600);
+  const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
+  const transport = transportWithDeadlines(
+    { command: process.execPath, args: [entryPath], stderr: "pipe" },
+    shortShutdownDeadlines,
+  );
+
+  try {
+    await transport.start();
+    await expect(transport.close()).rejects.toBeInstanceOf(RuntimeTerminationUnobservedError);
+    expect(transport.finalCloseObserved).toBe(false);
+    await expect(transport.close()).rejects.toThrow("Runtime did not exit cleanly");
+    expect(transport.finalCloseObserved).toBe(true);
+    expect(transport.pid).toBeNull();
+  } finally {
+    killSpy.mockRestore();
+  }
+});
+
+it("releases staging after a synchronous pre-child spawn failure", async () => {
+  const serverPath = await healthArtifact();
+  const fixture = await signedArtifact(serverPath);
+  const baseline = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("navact-runtime-")));
+  const supervisor = new RuntimeSupervisor({
+    ...fixture,
+    launch: { kind: "host-node", artifactPath: serverPath, cwd: "invalid\0cwd" },
+  });
+
+  let startError: unknown;
+  let stopError: unknown;
+  try {
+    await supervisor.start("nonce-spawn-failure");
+  } catch (error) {
+    startError = error;
+  }
+  try {
+    await supervisor.stop();
+  } catch (error) {
+    stopError = error;
+  }
+  const afterStop = (await readdir(tmpdir())).filter((name) => name.startsWith("navact-runtime-"));
+  const leaked = afterStop.filter((name) => !baseline.has(name));
+  await Promise.all(leaked.map((name) => rm(join(tmpdir(), name), { recursive: true, force: true })));
+
+  expect(startError).toBeInstanceOf(TypeError);
+  expect(String(startError)).toMatch(/null bytes|NUL|invalid/i);
+  expect(stopError).toBeUndefined();
+  expect(supervisor.state).toBe("idle");
+  expect(leaked).toEqual([]);
+});
+
+it("accepts only a protected current-SID Windows ACL snapshot", async () => {
+  const sid = "S-1-5-21-1000-1001-1002-1003";
+  const rule = {
+    identitySid: sid,
+    accessControlType: 0,
+    fileSystemRights: 2_032_127,
+    inheritanceFlags: 3,
+    propagationFlags: 0,
+    isInherited: false,
+  };
+  const validSnapshot = {
+    areAccessRulesProtected: true,
+    ownerSid: sid,
+    accessRules: [rule],
+  };
+
+  expect(() => validateWindowsAclSnapshot(validSnapshot, sid)).not.toThrow();
+  expect(() =>
+    validateWindowsAclSnapshot(
+      {
+        ...validSnapshot,
+        accessRules: [
+          rule,
+          { ...rule, identitySid: "S-1-5-32-544" },
+        ],
+      },
+      sid,
+    ),
+  ).toThrow("invalid Windows staging ACL");
+});
 
 it("freezes premature exit before a descendant releases inherited stdio", async () => {
   const directory = await mkdtemp(join(tmpdir(), "navact-exit-close-gap-"));

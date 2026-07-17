@@ -5,10 +5,22 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { PassThrough, type Stream } from "node:stream";
 
-const gracefulExitTimeoutMs = 2_000;
-const signalExitTimeoutMs = 2_000;
-const forcedExitTimeoutMs = 2_000;
+const productionShutdownDeadlines = {
+  gracefulExitTimeoutMs: 2_000,
+  signalExitTimeoutMs: 2_000,
+  forcedExitTimeoutMs: 2_000,
+} as const;
 const uncleanExitMessage = "Runtime did not exit cleanly";
+
+export interface RuntimeShutdownDeadlines {
+  readonly gracefulExitTimeoutMs: number;
+  readonly signalExitTimeoutMs: number;
+  readonly forcedExitTimeoutMs: number;
+}
+
+export interface RuntimeStdioTransportOptions {
+  readonly shutdownDeadlines?: RuntimeShutdownDeadlines;
+}
 
 export interface RuntimeExitObservation {
   readonly code: number | null;
@@ -38,10 +50,28 @@ export class RuntimeStdioTransport implements Transport {
   private closePromise: Promise<void> | undefined;
   private closeRequested = false;
   private closeNotified = false;
-  private escalated = false;
+  private gracefulDeadlineMissed = false;
+  private signalDelivered = false;
+  private terminalWithoutChild = false;
   private started = false;
+  private readonly shutdownDeadlines: RuntimeShutdownDeadlines;
 
-  constructor(private readonly server: StdioServerParameters) {
+  constructor(
+    private readonly server: StdioServerParameters,
+    options: RuntimeStdioTransportOptions = {},
+  ) {
+    this.shutdownDeadlines = Object.freeze({
+      ...(options.shutdownDeadlines ?? productionShutdownDeadlines),
+    });
+    for (const timeoutMs of [
+      this.shutdownDeadlines.gracefulExitTimeoutMs,
+      this.shutdownDeadlines.signalExitTimeoutMs,
+      this.shutdownDeadlines.forcedExitTimeoutMs,
+    ]) {
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+        throw new Error("Runtime shutdown deadlines must be positive safe integers");
+      }
+    }
     this.stderrStream = server.stderr === "pipe" || server.stderr === "overlapped" ? new PassThrough() : null;
     this.finalClosePromise = new Promise((resolve) => {
       this.resolveFinalClose = resolve;
@@ -68,19 +98,32 @@ export class RuntimeStdioTransport implements Transport {
     return this.observedExit;
   }
 
+  get processOwnershipResolved(): boolean {
+    return this.terminalWithoutChild || this.observedFinalClose;
+  }
+
   async start(): Promise<void> {
     if (this.started) throw new Error("RuntimeStdioTransport already started");
     this.started = true;
 
     await new Promise<void>((resolve, reject) => {
       let startSettled = false;
-      const child = spawn(this.server.command, this.server.args ?? [], {
-        env: { ...getDefaultEnvironment(), ...this.server.env },
-        stdio: ["pipe", "pipe", this.server.stderr ?? "inherit"],
-        shell: false,
-        windowsHide: process.platform === "win32",
-        cwd: this.server.cwd,
-      });
+      let child: ChildProcess;
+      try {
+        child = spawn(this.server.command, this.server.args ?? [], {
+          env: { ...getDefaultEnvironment(), ...this.server.env },
+          stdio: ["pipe", "pipe", this.server.stderr ?? "inherit"],
+          shell: false,
+          windowsHide: process.platform === "win32",
+          cwd: this.server.cwd,
+        });
+      } catch (error) {
+        this.terminalWithoutChild = true;
+        this.readBuffer.clear();
+        this.notifyClose();
+        reject(error);
+        return;
+      }
       this.child = child;
 
       child.once("spawn", () => {
@@ -155,6 +198,7 @@ export class RuntimeStdioTransport implements Transport {
 
   private async closeOwnedProcess(): Promise<void> {
     this.closeRequested = true;
+    if (this.terminalWithoutChild) return;
     const child = this.child;
     if (child !== undefined && !this.observedFinalClose) {
       try {
@@ -162,22 +206,28 @@ export class RuntimeStdioTransport implements Transport {
       } catch {
         // Final close observation determines whether shutdown was clean.
       }
-      if (!(await this.waitForFinalClose(gracefulExitTimeoutMs))) {
+      if (!(await this.waitForFinalClose(this.shutdownDeadlines.gracefulExitTimeoutMs))) {
+        this.gracefulDeadlineMissed = true;
         if (!this.exitObserved) {
           try {
-            if (child.kill("SIGTERM")) this.escalated = true;
+            if (child.kill("SIGTERM")) this.signalDelivered = true;
           } catch {
             // Continue to the final close observation and forced fallback.
           }
         }
-        if (!(await this.waitForFinalClose(signalExitTimeoutMs)) && !this.exitObserved) {
+        if (
+          !(await this.waitForFinalClose(this.shutdownDeadlines.signalExitTimeoutMs)) &&
+          !this.exitObserved
+        ) {
           try {
-            if (child.kill("SIGKILL")) this.escalated = true;
+            if (child.kill("SIGKILL")) this.signalDelivered = true;
           } catch {
             // The bounded final wait below still proves whether close was observed.
           }
         }
-        if (!this.observedFinalClose) await this.waitForFinalClose(forcedExitTimeoutMs);
+        if (!this.observedFinalClose) {
+          await this.waitForFinalClose(this.shutdownDeadlines.forcedExitTimeoutMs);
+        }
       }
     }
 
@@ -186,7 +236,8 @@ export class RuntimeStdioTransport implements Transport {
     if (
       observation === undefined ||
       observation.premature ||
-      this.escalated ||
+      this.gracefulDeadlineMissed ||
+      this.signalDelivered ||
       observation.code !== 0 ||
       observation.signal !== null
     ) {

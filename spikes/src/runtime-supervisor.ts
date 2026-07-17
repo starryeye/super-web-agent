@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { chmod, copyFile, mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
@@ -38,12 +39,21 @@ export interface StagedRuntimeArtifact {
   cleanup: () => Promise<void>;
 }
 
-function runTextCommand(command: string, args: string[]): Promise<string> {
+function runTextCommand(command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolveCommand, rejectCommand) => {
-    execFile(command, args, { encoding: "utf8", windowsHide: true }, (error, stdout) => {
-      if (error !== null) rejectCommand(error);
-      else resolveCommand(stdout);
-    });
+    execFile(
+      command,
+      args,
+      {
+        encoding: "utf8",
+        windowsHide: true,
+        ...(env === undefined ? {} : { env }),
+      },
+      (error, stdout) => {
+        if (error !== null) rejectCommand(error);
+        else resolveCommand(stdout);
+      },
+    );
   });
 }
 
@@ -55,30 +65,157 @@ function system32Executable(name: "whoami.exe" | "icacls.exe"): string {
   return join(systemRoot, "System32", name);
 }
 
-async function restrictStagingDirectory(stagingDirectory: string): Promise<void> {
-  if (process.platform !== "win32") {
-    await chmod(stagingDirectory, 0o700);
-    if (((await stat(stagingDirectory)).mode & 0o777) !== 0o700) {
-      throw new Error("Runtime staging directory must have mode 0700");
-    }
-    return;
+function windowsPowerShellExecutable(): string {
+  const systemRoot = process.env.SystemRoot ?? process.env.SYSTEMROOT;
+  if (systemRoot === undefined || !isAbsolute(systemRoot)) {
+    throw new Error("Windows SystemRoot must be absolute");
   }
+  return join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+}
 
-  const whoami = system32Executable("whoami.exe");
-  const icacls = system32Executable("icacls.exe");
-  const sidOutput = await runTextCommand(whoami, ["/user", "/fo", "csv", "/nh"]);
+function sidEquals(left: string, right: string): boolean {
+  return left.toUpperCase() === right.toUpperCase();
+}
+
+export function validateWindowsAclSnapshot(snapshot: unknown, currentSid: string): void {
+  const record = snapshot as Record<string, unknown> | undefined;
+  const accessRules = record?.accessRules;
+  if (
+    record?.areAccessRulesProtected !== true ||
+    typeof record.ownerSid !== "string" ||
+    !sidEquals(record.ownerSid, currentSid) ||
+    !Array.isArray(accessRules) ||
+    accessRules.length !== 1
+  ) {
+    throw new Error("invalid Windows staging ACL");
+  }
+  const rule = accessRules[0] as Record<string, unknown> | undefined;
+  if (
+    typeof rule?.identitySid !== "string" ||
+    !sidEquals(rule.identitySid, currentSid) ||
+    rule.accessControlType !== 0 ||
+    rule.fileSystemRights !== 2_032_127 ||
+    rule.inheritanceFlags !== 3 ||
+    rule.propagationFlags !== 0 ||
+    rule.isInherited !== false
+  ) {
+    throw new Error("invalid Windows staging ACL");
+  }
+}
+
+const createPrivateWindowsDirectoryScript = String.raw`
+$ErrorActionPreference = 'Stop'
+$path = $env:NAVACT_STAGE_PATH
+$sid = [System.Security.Principal.SecurityIdentifier]::new($env:NAVACT_STAGE_SID)
+if ([System.IO.Directory]::Exists($path) -or [System.IO.File]::Exists($path)) {
+  throw 'Runtime staging path already exists'
+}
+$security = [System.Security.AccessControl.DirectorySecurity]::new()
+$security.SetAccessRuleProtection($true, $false)
+$security.SetOwner($sid)
+$inheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+  $sid,
+  [System.Security.AccessControl.FileSystemRights]::FullControl,
+  $inheritance,
+  [System.Security.AccessControl.PropagationFlags]::None,
+  [System.Security.AccessControl.AccessControlType]::Allow
+)
+[void]$security.AddAccessRule($rule)
+try {
+  [void][System.IO.Directory]::CreateDirectory($path, $security)
+} catch {
+  if ([System.IO.Directory]::Exists($path)) {
+    Remove-Item -LiteralPath $path -Recurse -Force
+  }
+  throw
+}
+`;
+
+const inspectWindowsDirectoryAclScript = String.raw`
+$ErrorActionPreference = 'Stop'
+$acl = Get-Acl -LiteralPath $env:NAVACT_STAGE_PATH
+$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+  [pscustomobject]@{
+    identitySid = $_.IdentityReference.Value
+    accessControlType = [int]$_.AccessControlType
+    fileSystemRights = [int]$_.FileSystemRights
+    inheritanceFlags = [int]$_.InheritanceFlags
+    propagationFlags = [int]$_.PropagationFlags
+    isInherited = $_.IsInherited
+  }
+})
+[pscustomobject]@{
+  areAccessRulesProtected = $acl.AreAccessRulesProtected
+  ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+  accessRules = @($rules)
+} | ConvertTo-Json -Depth 5 -Compress
+`;
+
+async function runWindowsPowerShell(script: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return runTextCommand(
+    windowsPowerShellExecutable(),
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+    env,
+  );
+}
+
+async function discoverWindowsSid(): Promise<string> {
+  const sidOutput = await runTextCommand(system32Executable("whoami.exe"), ["/user", "/fo", "csv", "/nh"]);
   const sidMatches = sidOutput.match(/\bS-\d+(?:-\d+)+\b/gi) ?? [];
   if (sidMatches.length !== 1 || sidMatches[0] === undefined) {
     throw new Error("failed to discover current Windows user SID");
   }
-  const sid = sidMatches[0];
-  await runTextCommand(icacls, [
-    stagingDirectory,
-    "/inheritance:r",
-    "/grant:r",
-    `*${sid}:(OI)(CI)F`,
-  ]);
-  await runTextCommand(icacls, [stagingDirectory, "/verify"]);
+  return sidMatches[0];
+}
+
+async function createPosixStagingDirectory(): Promise<string> {
+  const stagingDirectory = await mkdtemp(join(tmpdir(), "navact-runtime-"));
+  try {
+    await chmod(stagingDirectory, 0o700);
+    if (((await stat(stagingDirectory)).mode & 0o777) !== 0o700) {
+      throw new Error("Runtime staging directory must have mode 0700");
+    }
+    return stagingDirectory;
+  } catch (error) {
+    await rm(stagingDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function createWindowsStagingDirectory(): Promise<string> {
+  const sid = await discoverWindowsSid();
+  const stagingDirectory = join(tmpdir(), `navact-runtime-${randomBytes(32).toString("hex")}`);
+  const icacls = system32Executable("icacls.exe");
+  const powershellEnvironment = {
+    ...process.env,
+    NAVACT_STAGE_PATH: stagingDirectory,
+    NAVACT_STAGE_SID: sid,
+  };
+  try {
+    await runWindowsPowerShell(createPrivateWindowsDirectoryScript, powershellEnvironment);
+    await runTextCommand(icacls, [
+      stagingDirectory,
+      "/inheritance:r",
+      "/grant:r",
+      `*${sid}:(OI)(CI)F`,
+    ]);
+    await runTextCommand(icacls, [stagingDirectory, "/verify"]);
+    const snapshotText = await runWindowsPowerShell(inspectWindowsDirectoryAclScript, powershellEnvironment);
+    validateWindowsAclSnapshot(JSON.parse(snapshotText) as unknown, sid);
+    return stagingDirectory;
+  } catch (error) {
+    try {
+      await rm(stagingDirectory, { recursive: true, force: true });
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "failed to secure and clean Runtime staging directory");
+    }
+    throw error;
+  }
+}
+
+async function createPrivateStagingDirectory(): Promise<string> {
+  return process.platform === "win32" ? createWindowsStagingDirectory() : createPosixStagingDirectory();
 }
 
 export function validateHealthResult(value: unknown, nonce: string): HealthResult {
@@ -101,7 +238,7 @@ export async function stageRuntimeArtifact(
   if (!isAbsolute(input.artifactPath)) throw new Error("Runtime artifact path must be absolute");
   await verifyRuntimeArtifact(input);
 
-  const stagingDirectory = await mkdtemp(join(tmpdir(), "navact-runtime-"));
+  const stagingDirectory = await createPrivateStagingDirectory();
   let cleanupComplete = false;
   const cleanup = async (): Promise<void> => {
     if (cleanupComplete) return;
@@ -110,7 +247,6 @@ export async function stageRuntimeArtifact(
   };
 
   try {
-    await restrictStagingDirectory(stagingDirectory);
     const stagedPath = join(stagingDirectory, basename(input.artifactPath));
     await copyFile(input.artifactPath, stagedPath);
     await chmod(stagedPath, input.kind === "self-contained" ? 0o500 : 0o400);
@@ -221,14 +357,14 @@ export class RuntimeSupervisor {
     } catch (error) {
       failure = error;
     }
-    if (transport !== undefined && (client === undefined || transport.finalCloseObserved)) {
+    if (transport !== undefined && (client === undefined || transport.processOwnershipResolved)) {
       try {
         await transport.close();
       } catch (error) {
         failure ??= error;
       }
     }
-    if (transport !== undefined && !transport.finalCloseObserved) {
+    if (transport !== undefined && !transport.processOwnershipResolved) {
       return failure instanceof RuntimeTerminationUnobservedError
         ? failure
         : new RuntimeTerminationUnobservedError(
