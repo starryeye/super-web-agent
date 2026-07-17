@@ -2,9 +2,19 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { canonicalManifestPayload, type RuntimeManifest } from "../src/runtime-manifest.js";
-import { RuntimeSupervisor, validateHealthResult, type RuntimeLaunchSpec } from "../src/runtime-supervisor.js";
+import {
+  canonicalManifestPayload,
+  verifyRuntimeArtifact,
+  type RuntimeManifest,
+} from "../src/runtime-manifest.js";
+import {
+  RuntimeSupervisor,
+  stageRuntimeArtifact,
+  validateHealthResult,
+  type RuntimeLaunchSpec,
+} from "../src/runtime-supervisor.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -32,8 +42,49 @@ async function signedArtifact(artifactPath: string) {
   };
 }
 
+async function healthArtifact(stubborn = false): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), stubborn ? "navact-stubborn-runtime-" : "navact-runtime-"));
+  temporaryDirectories.push(directory);
+  const artifactPath = join(directory, stubborn ? "stubborn-health.mjs" : "mcp-health-entry.mjs");
+  const healthServerUrl = pathToFileURL(resolve("dist/src/mcp-health-server.js")).href;
+  await writeFile(
+    artifactPath,
+    [
+      `import { startHealthServer } from ${JSON.stringify(healthServerUrl)};`,
+      ...(stubborn
+        ? [
+            'if (process.platform !== "win32") process.on("SIGTERM", () => undefined);',
+            "setInterval(() => undefined, 1_000);",
+          ]
+        : []),
+      "await startHealthServer();",
+      "",
+    ].join("\n"),
+  );
+  return artifactPath;
+}
+
+it("stages signed bytes independently from later source mutation", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "navact-stage-source-"));
+  temporaryDirectories.push(directory);
+  const sourcePath = join(directory, "mcp-health-entry.js");
+  await copyFile(resolve("dist/src/mcp-health-entry.js"), sourcePath);
+  const fixture = await signedArtifact(sourcePath);
+  const staged = await stageRuntimeArtifact({ ...fixture, kind: "host-node" });
+  try {
+    expect(staged.artifactPath).not.toBe(sourcePath);
+    expect(basename(staged.artifactPath)).toBe(basename(sourcePath));
+    await writeFile(sourcePath, "tampered after staging");
+    await expect(
+      verifyRuntimeArtifact({ ...fixture, artifactPath: staged.artifactPath }),
+    ).resolves.toMatchObject({ platform: `${process.platform}-${process.arch}` });
+  } finally {
+    await staged.cleanup();
+  }
+});
+
 it("verifies, starts, calls, and stops the compiled Runtime", async () => {
-  const serverPath = resolve("dist/src/mcp-health-entry.js");
+  const serverPath = await healthArtifact();
   const fixture = await signedArtifact(serverPath);
   const supervisor = new RuntimeSupervisor({
     ...fixture,
@@ -45,6 +96,41 @@ it("verifies, starts, calls, and stops the compiled Runtime", async () => {
     platform: `${process.platform}-${process.arch}`,
   });
   await supervisor.stop();
+  expect(supervisor.state).toBe("idle");
+});
+
+it("serializes an immediate stop behind an in-flight start", async () => {
+  const serverPath = await healthArtifact();
+  const fixture = await signedArtifact(serverPath);
+  const supervisor = new RuntimeSupervisor({
+    ...fixture,
+    launch: { kind: "host-node", artifactPath: serverPath },
+  });
+  const startPromise = supervisor.start("nonce-race");
+  const stopPromise = supervisor.stop();
+
+  try {
+    const [health] = await Promise.all([startPromise, stopPromise]);
+    expect.soft(supervisor.state).toBe("idle");
+    expect(() => process.kill(health.pid, 0)).toThrow();
+  } finally {
+    await supervisor.stop();
+  }
+});
+
+it("rejects stop after forced termination of a stubborn healthy Runtime", async () => {
+  const artifactPath = await healthArtifact(true);
+  const fixture = await signedArtifact(artifactPath);
+  const supervisor = new RuntimeSupervisor({
+    ...fixture,
+    launch: { kind: "host-node", artifactPath },
+  });
+
+  await expect(supervisor.start("nonce-stubborn")).resolves.toMatchObject({
+    status: "ok",
+    nonce: "nonce-stubborn",
+  });
+  await expect(supervisor.stop()).rejects.toThrow("Runtime did not exit cleanly");
   expect(supervisor.state).toBe("idle");
 });
 
@@ -82,7 +168,7 @@ it("rejects a launch path different from the verified artifact", async () => {
 });
 
 it("derives the Host Node executable instead of honoring a caller override", async () => {
-  const serverPath = resolve("dist/src/mcp-health-entry.js");
+  const serverPath = await healthArtifact();
   const fixture = await signedArtifact(serverPath);
   const launch = {
     kind: "host-node",
