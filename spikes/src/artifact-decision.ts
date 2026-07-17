@@ -31,8 +31,9 @@ export function parsePackagingPlatformReport(value: unknown): PackagingPlatformR
   if (report.artifactSignatureMode !== "ephemeral-test-key") {
     throw new Error("unexpected artifact signature mode");
   }
-  if (report.osCodeSigning !== "ad-hoc" && report.osCodeSigning !== "unsigned-test") {
-    throw new Error("unexpected OS signing mode");
+  const expectedSigning = report.platform === "darwin-arm64" ? "ad-hoc" : "unsigned-test";
+  if (report.osCodeSigning !== expectedSigning) {
+    throw new Error("unexpected OS signing mode for platform");
   }
   if (!Array.isArray(report.variants) || report.variants.length !== 2) {
     throw new Error("packaging report must contain two variants");
@@ -45,7 +46,13 @@ export function parsePackagingPlatformReport(value: unknown): PackagingPlatformR
     if (variant.kind !== "host-node" && variant.kind !== "self-contained") {
       throw new Error("invalid packaging variant kind");
     }
-    if (typeof variant.artifact !== "string" || typeof variant.bytes !== "number" || variant.bytes < 0) {
+    if (
+      typeof variant.artifact !== "string" ||
+      variant.artifact.length === 0 ||
+      typeof variant.bytes !== "number" ||
+      !Number.isSafeInteger(variant.bytes) ||
+      variant.bytes <= 0
+    ) {
       throw new Error("invalid packaging artifact fields");
     }
     if (
@@ -57,20 +64,38 @@ export function parsePackagingPlatformReport(value: unknown): PackagingPlatformR
     }
     if (
       !Array.isArray(variant.startsMs) ||
-      !variant.startsMs.every((sample) => typeof sample === "number" && sample >= 0)
+      !variant.startsMs.every(
+        (sample) => typeof sample === "number" && Number.isFinite(sample) && sample >= 0,
+      )
     ) {
       throw new Error("invalid packaging start samples");
     }
-    if (!Array.isArray(variant.errors) || !variant.errors.every((error) => typeof error === "string")) {
+    if (
+      !Array.isArray(variant.errors) ||
+      !variant.errors.every((error) => typeof error === "string" && error.length > 0)
+    ) {
       throw new Error("invalid packaging errors");
     }
+    const requiresHostNode = variant.kind === "host-node";
+    if (variant.requiresHostNode !== requiresHostNode) {
+      throw new Error("variant Host Node requirement contradicts kind");
+    }
+    const probesPassed = variant.healthPassed && variant.cleanupPassed;
+    if ((probesPassed && variant.errors.length > 0) || (!probesPassed && variant.errors.length === 0)) {
+      throw new Error("packaging probe result contradicts errors");
+    }
+  }
+  const kinds = new Set(report.variants.map((variant) => (variant as Record<string, unknown>).kind));
+  if (kinds.size !== 2 || !kinds.has("host-node") || !kinds.has("self-contained")) {
+    throw new Error("packaging report must contain one variant of each kind");
   }
   return report as unknown as PackagingPlatformReport;
 }
 
 export function evaluateArtifactEvidence(reports: PackagingPlatformReport[]): ArtifactDecision {
+  const validatedReports = reports.map((report) => parsePackagingPlatformReport(report));
   const duplicates = requiredPlatforms.filter(
-    (platform) => reports.filter((report) => report.platform === platform).length > 1,
+    (platform) => validatedReports.filter((report) => report.platform === platform).length > 1,
   );
   if (duplicates.length > 0) {
     return {
@@ -80,7 +105,7 @@ export function evaluateArtifactEvidence(reports: PackagingPlatformReport[]): Ar
     };
   }
   const missing = requiredPlatforms.filter(
-    (platform) => !reports.some((report) => report.platform === platform),
+    (platform) => !validatedReports.some((report) => report.platform === platform),
   );
   if (missing.length > 0) {
     return {
@@ -91,7 +116,7 @@ export function evaluateArtifactEvidence(reports: PackagingPlatformReport[]): Ar
   }
   const failures: string[] = [];
   for (const platform of requiredPlatforms) {
-    const report = reports.find((candidate) => candidate.platform === platform)!;
+    const report = validatedReports.find((candidate) => candidate.platform === platform)!;
     const gate = evaluatePackagingPlatform(report);
     if (gate.gate === "fail") failures.push(`${platform}: ${gate.reason}`);
   }

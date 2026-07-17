@@ -1,5 +1,11 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { expect, it } from "vitest";
-import { evaluateArtifactEvidence, renderArtifactDecision } from "../src/artifact-decision.js";
+import {
+  evaluateArtifactEvidence,
+  parsePackagingPlatformReport,
+  renderArtifactDecision,
+} from "../src/artifact-decision.js";
 import type { PackagingPlatformReport, TargetPlatform } from "../src/packaging-report.js";
 
 function passingReport(platform: TargetPlatform): PackagingPlatformReport {
@@ -76,10 +82,55 @@ it.each([
       const mac = passingReport("darwin-arm64");
       const windows = passingReport("win32-x64");
       windows.variants[1]!.healthPassed = false;
+      windows.variants[1]!.errors.push("MCP connection closed");
       return [mac, windows];
     })(),
     status: "Rejected",
   },
 ])("renders calculated $status status", ({ reports, status }) => {
   expect(renderArtifactDecision(reports)).toContain(`Status: ${status}`);
+});
+
+it.each([
+  { platform: "darwin-arm64" as const, signing: "unsigned-test" as const },
+  { platform: "win32-x64" as const, signing: "ad-hoc" as const },
+])("rejects $signing signing evidence for $platform", ({ platform, signing }) => {
+  const report = passingReport(platform);
+  report.osCodeSigning = signing;
+  expect(() => parsePackagingPlatformReport(report)).toThrow("unexpected OS signing mode for platform");
+});
+
+it("requires exactly one Host-Node and one self-contained variant", () => {
+  const report = passingReport("darwin-arm64");
+  report.variants[1] = structuredClone(report.variants[0]!);
+  expect(() => parsePackagingPlatformReport(report)).toThrow("one variant of each kind");
+});
+
+it.each([
+  { kind: "host-node" as const, requiresHostNode: false },
+  { kind: "self-contained" as const, requiresHostNode: true },
+])("rejects contradictory $kind Host Node metadata", ({ kind, requiresHostNode }) => {
+  const report = passingReport("darwin-arm64");
+  report.variants.find((variant) => variant.kind === kind)!.requiresHostNode = requiresHostNode;
+  expect(() => parsePackagingPlatformReport(report)).toThrow("variant Host Node requirement contradicts kind");
+});
+
+it("rejects successful probes that still record errors", () => {
+  const report = passingReport("darwin-arm64");
+  report.variants[1]!.errors.push("ignored failure");
+  expect(() => parsePackagingPlatformReport(report)).toThrow("packaging probe result contradicts errors");
+});
+
+it.each(["bytes", "start sample"])("rejects non-finite %s from valid JSON", (field) => {
+  const report = passingReport("darwin-arm64");
+  const overflow = JSON.parse("1e400") as number;
+  if (field === "bytes") report.variants[1]!.bytes = overflow;
+  else report.variants[1]!.startsMs[0] = overflow;
+  expect(() => parsePackagingPlatformReport(report)).toThrow("invalid packaging");
+});
+
+it("uploads reports from the ignored hidden artifact directory", async () => {
+  const workflow = await readFile(resolve("..", ".github", "workflows", "architecture-spikes.yml"), "utf8");
+  expect(workflow).toContain("include-hidden-files: true");
+  expect(workflow).toContain("if-no-files-found: error");
 });

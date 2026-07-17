@@ -41,6 +41,8 @@ jobs:
         with:
           name: runtime-artifact-${{ runner.os }}-${{ runner.arch }}
           path: spikes/.artifacts/packaging/
+          include-hidden-files: true
+          if-no-files-found: error
 
   artifact-decision:
     if: always()
