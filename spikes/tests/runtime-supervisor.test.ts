@@ -1,8 +1,10 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -206,37 +208,33 @@ it("accepts only a protected current-SID Windows ACL snapshot", async () => {
   ).toThrow("invalid Windows staging ACL");
 });
 
-it("freezes premature exit before a descendant releases inherited stdio", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-exit-close-gap-"));
-  temporaryDirectories.push(directory);
-  const entryPath = join(directory, "exit-close-gap.mjs");
-  await writeFile(
-    entryPath,
-    [
-      'import { spawn } from "node:child_process";',
-      'const descendant = spawn(process.execPath, ["-e", "setTimeout(() => undefined, 1_500)"], {',
-      '  stdio: ["ignore", "inherit", "inherit"],',
-      "  windowsHide: true,",
-      "});",
-      "descendant.unref();",
-      "",
-    ].join("\n"),
+it("freezes premature exit before a later final close", async () => {
+  const fakeChild = Object.assign(new EventEmitter(), {
+    pid: 48_280,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess;
+  const spawnProcess = vi.fn(() => fakeChild) as unknown as typeof import("node:child_process").spawn;
+  const transport = new RuntimeStdioTransport(
+    { command: process.execPath, stderr: "pipe" },
+    { shutdownDeadlines: shortShutdownDeadlines, spawnProcess },
   );
-  const transport = new RuntimeStdioTransport({
-    command: process.execPath,
-    args: [entryPath],
-    stderr: "pipe",
-  });
 
-  await transport.start();
+  const startPromise = transport.start();
+  fakeChild.emit("spawn");
+  await startPromise;
   const pid = transport.pid;
   expect(pid).not.toBeNull();
-  await waitFor(() => transport.exitObserved);
+  fakeChild.emit("exit", 0, null);
   expect(transport.pid).toBe(pid);
   expect(transport.finalCloseObserved).toBe(false);
   expect(transport.exitObservation).toEqual({ code: 0, signal: null, premature: true });
   expect(Object.isFrozen(transport.exitObservation)).toBe(true);
-  await expect(transport.close()).rejects.toThrow("Runtime did not exit cleanly");
+  const closePromise = transport.close();
+  setTimeout(() => fakeChild.emit("close", 0, null), 20);
+  await expect(closePromise).rejects.toThrow("Runtime did not exit cleanly");
   expect(transport.finalCloseObserved).toBe(true);
 });
 

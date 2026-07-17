@@ -134,7 +134,8 @@ try {
 
 const inspectWindowsDirectoryAclScript = String.raw`
 $ErrorActionPreference = 'Stop'
-$acl = Get-Acl -LiteralPath $env:NAVACT_STAGE_PATH
+$sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
+$acl = [System.Security.AccessControl.DirectorySecurity]::new($env:NAVACT_STAGE_PATH, $sections)
 $rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
   [pscustomobject]@{
     identitySid = $_.IdentityReference.Value

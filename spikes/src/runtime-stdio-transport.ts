@@ -20,6 +20,7 @@ export interface RuntimeShutdownDeadlines {
 
 export interface RuntimeStdioTransportOptions {
   readonly shutdownDeadlines?: RuntimeShutdownDeadlines;
+  readonly spawnProcess?: typeof spawn;
 }
 
 export interface RuntimeExitObservation {
@@ -55,6 +56,7 @@ export class RuntimeStdioTransport implements Transport {
   private terminalWithoutChild = false;
   private started = false;
   private readonly shutdownDeadlines: RuntimeShutdownDeadlines;
+  private readonly spawnProcess: typeof spawn;
 
   constructor(
     private readonly server: StdioServerParameters,
@@ -63,6 +65,7 @@ export class RuntimeStdioTransport implements Transport {
     this.shutdownDeadlines = Object.freeze({
       ...(options.shutdownDeadlines ?? productionShutdownDeadlines),
     });
+    this.spawnProcess = options.spawnProcess ?? spawn;
     for (const timeoutMs of [
       this.shutdownDeadlines.gracefulExitTimeoutMs,
       this.shutdownDeadlines.signalExitTimeoutMs,
@@ -110,7 +113,7 @@ export class RuntimeStdioTransport implements Transport {
       let startSettled = false;
       let child: ChildProcess;
       try {
-        child = spawn(this.server.command, this.server.args ?? [], {
+        child = this.spawnProcess(this.server.command, this.server.args ?? [], {
           env: { ...getDefaultEnvironment(), ...this.server.env },
           stdio: ["pipe", "pipe", this.server.stderr ?? "inherit"],
           shell: false,
