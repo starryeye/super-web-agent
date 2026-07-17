@@ -134,3 +134,16 @@ it("uploads reports from the ignored hidden artifact directory", async () => {
   expect(workflow).toContain("include-hidden-files: true");
   expect(workflow).toContain("if-no-files-found: error");
 });
+
+it("renders a zero-byte SEA construction failure as Rejected evidence", () => {
+  const mac = passingReport("darwin-arm64");
+  const windows = passingReport("win32-x64");
+  const candidate = windows.variants.find((variant) => variant.kind === "self-contained")!;
+  candidate.bytes = 0;
+  candidate.healthPassed = false;
+  candidate.cleanupPassed = false;
+  candidate.startsMs = [];
+  candidate.errors = ["pnpm did not provide npm_execpath"];
+  expect(() => parsePackagingPlatformReport(windows)).not.toThrow();
+  expect(renderArtifactDecision([mac, windows])).toContain("Status: Rejected");
+});

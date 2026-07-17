@@ -51,7 +51,7 @@ export function parsePackagingPlatformReport(value: unknown): PackagingPlatformR
       variant.artifact.length === 0 ||
       typeof variant.bytes !== "number" ||
       !Number.isSafeInteger(variant.bytes) ||
-      variant.bytes <= 0
+      variant.bytes < 0
     ) {
       throw new Error("invalid packaging artifact fields");
     }
@@ -81,6 +81,9 @@ export function parsePackagingPlatformReport(value: unknown): PackagingPlatformR
       throw new Error("variant Host Node requirement contradicts kind");
     }
     const probesPassed = variant.healthPassed && variant.cleanupPassed;
+    if (variant.bytes === 0 && probesPassed) {
+      throw new Error("empty packaging artifact cannot pass probes");
+    }
     if ((probesPassed && variant.errors.length > 0) || (!probesPassed && variant.errors.length === 0)) {
       throw new Error("packaging probe result contradicts errors");
     }
