@@ -103,6 +103,51 @@ export function validateWindowsAclSnapshot(snapshot: unknown, currentSid: string
   }
 }
 
+function parseAclInteger(value: string): number {
+  if (!/^(?:0|[1-9]\d*)$/.test(value)) throw new Error("invalid Windows staging ACL output");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) throw new Error("invalid Windows staging ACL output");
+  return parsed;
+}
+
+export function parseWindowsAclSnapshot(output: string): unknown {
+  const lines = output.trim().split(/\r?\n/);
+  const protectedFields = lines[0]?.split("\t");
+  const ownerFields = lines[1]?.split("\t");
+  if (
+    protectedFields?.length !== 2 ||
+    protectedFields[0] !== "protected" ||
+    (protectedFields[1] !== "0" && protectedFields[1] !== "1") ||
+    ownerFields?.length !== 2 ||
+    ownerFields[0] !== "owner" ||
+    ownerFields[1] === ""
+  ) {
+    throw new Error("invalid Windows staging ACL output");
+  }
+  const accessRules = lines.slice(2).map((line) => {
+    const fields = line.split("\t");
+    if (fields.length !== 7 || fields[0] !== "rule" || fields[1] === "") {
+      throw new Error("invalid Windows staging ACL output");
+    }
+    return {
+      identitySid: fields[1],
+      accessControlType: parseAclInteger(fields[2] ?? ""),
+      fileSystemRights: parseAclInteger(fields[3] ?? ""),
+      inheritanceFlags: parseAclInteger(fields[4] ?? ""),
+      propagationFlags: parseAclInteger(fields[5] ?? ""),
+      isInherited: fields[6] === "1" ? true : fields[6] === "0" ? false : undefined,
+    };
+  });
+  if (accessRules.some((rule) => rule.isInherited === undefined)) {
+    throw new Error("invalid Windows staging ACL output");
+  }
+  return {
+    areAccessRulesProtected: protectedFields[1] === "1",
+    ownerSid: ownerFields[1],
+    accessRules,
+  };
+}
+
 const createPrivateWindowsDirectoryScript = String.raw`
 $ErrorActionPreference = 'Stop'
 $path = $env:NAVACT_STAGE_PATH
@@ -136,21 +181,24 @@ const inspectWindowsDirectoryAclScript = String.raw`
 $ErrorActionPreference = 'Stop'
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
 $acl = [System.Security.AccessControl.DirectorySecurity]::new($env:NAVACT_STAGE_PATH, $sections)
-$rules = @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
-  [pscustomobject]@{
-    identitySid = $_.IdentityReference.Value
-    accessControlType = [int]$_.AccessControlType
-    fileSystemRights = [int]$_.FileSystemRights
-    inheritanceFlags = [int]$_.InheritanceFlags
-    propagationFlags = [int]$_.PropagationFlags
-    isInherited = $_.IsInherited
-  }
-})
-[pscustomobject]@{
-  areAccessRulesProtected = $acl.AreAccessRulesProtected
-  ownerSid = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-  accessRules = @($rules)
-} | ConvertTo-Json -Depth 5 -Compress
+$protected = if ($acl.AreAccessRulesProtected) { '1' } else { '0' }
+[Console]::Out.WriteLine([string]::Join([char]9, [string[]]@('protected', $protected)))
+[Console]::Out.WriteLine([string]::Join([char]9, [string[]]@(
+  'owner',
+  $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+)))
+foreach ($rule in $acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+  $inherited = if ($rule.IsInherited) { '1' } else { '0' }
+  [Console]::Out.WriteLine([string]::Join([char]9, [string[]]@(
+    'rule',
+    $rule.IdentityReference.Value,
+    ([int]$rule.AccessControlType).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    ([int]$rule.FileSystemRights).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    ([int]$rule.InheritanceFlags).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    ([int]$rule.PropagationFlags).ToString([System.Globalization.CultureInfo]::InvariantCulture),
+    $inherited
+  )))
+}
 `;
 
 async function runWindowsPowerShell(script: string, env: NodeJS.ProcessEnv): Promise<string> {
@@ -203,7 +251,7 @@ async function createWindowsStagingDirectory(): Promise<string> {
     ]);
     await runTextCommand(icacls, [stagingDirectory, "/verify"]);
     const snapshotText = await runWindowsPowerShell(inspectWindowsDirectoryAclScript, powershellEnvironment);
-    validateWindowsAclSnapshot(JSON.parse(snapshotText) as unknown, sid);
+    validateWindowsAclSnapshot(parseWindowsAclSnapshot(snapshotText), sid);
     return stagingDirectory;
   } catch (error) {
     try {

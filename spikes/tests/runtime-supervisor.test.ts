@@ -13,6 +13,7 @@ import {
   type RuntimeManifest,
 } from "../src/runtime-manifest.js";
 import {
+  parseWindowsAclSnapshot,
   RuntimeSupervisor,
   stageRuntimeArtifact,
   validateWindowsAclSnapshot,
@@ -192,6 +193,16 @@ it("accepts only a protected current-SID Windows ACL snapshot", async () => {
     ownerSid: sid,
     accessRules: [rule],
   };
+
+  expect(
+    parseWindowsAclSnapshot(
+      [
+        "protected\t1",
+        `owner\t${sid}`,
+        `rule\t${sid}\t0\t2032127\t3\t0\t0`,
+      ].join("\r\n"),
+    ),
+  ).toEqual(validSnapshot);
 
   expect(() => validateWindowsAclSnapshot(validSnapshot, sid)).not.toThrow();
   expect(() =>
