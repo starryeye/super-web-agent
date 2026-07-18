@@ -1,8 +1,6 @@
-import { spawnSync } from "node:child_process";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative } from "node:path";
-import { build } from "esbuild";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { basename, join, relative } from "node:path";
 import { canonicalManifestPayload, type RuntimeManifest } from "../src/runtime-manifest.js";
 import {
   evaluatePackagingPlatform,
@@ -11,9 +9,9 @@ import {
   type TargetPlatform,
 } from "../src/packaging-report.js";
 import { RuntimeSupervisor, type RuntimeLaunchSpec } from "../src/runtime-supervisor.js";
+import { buildSelfContainedRuntime } from "../src/runtime-artifact-builder.js";
 
 const runtimeVersion = "0.0.0-spike" as const;
-const seaFuse = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
 const spikeRoot = process.cwd();
 const platform = `${process.platform}-${process.arch}`;
 
@@ -26,15 +24,6 @@ function requireTargetPlatform(value: string): TargetPlatform {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function runChecked(command: string, args: string[]): void {
-  const result = spawnSync(command, args, { encoding: "utf8", windowsHide: true });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) {
-    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-    throw new Error(`${basename(command)} exited ${String(result.status)}${detail.length === 0 ? "" : `: ${detail}`}`);
-  }
 }
 
 function environmentWithoutPath(): Record<string, string> {
@@ -113,26 +102,6 @@ async function exerciseVariant(input: {
   };
 }
 
-async function createSeaExecutable(hostBundle: string, executablePath: string, workingDirectory: string): Promise<void> {
-  const preparationBlob = join(workingDirectory, "sea-prep.blob");
-  const seaConfig = join(workingDirectory, "sea-config.json");
-  await writeFile(
-    seaConfig,
-    `${JSON.stringify({ main: hostBundle, output: preparationBlob, useSnapshot: false, useCodeCache: false }, null, 2)}\n`,
-  );
-  runChecked(process.execPath, ["--experimental-sea-config", seaConfig]);
-  await mkdir(dirname(executablePath), { recursive: true });
-  await copyFile(process.execPath, executablePath);
-  if (process.platform === "darwin") runChecked("/usr/bin/codesign", ["--remove-signature", executablePath]);
-  const pnpmEntry = process.env.npm_execpath;
-  if (pnpmEntry === undefined) throw new Error("pnpm did not provide npm_execpath");
-  const postjectArgs = [pnpmEntry, "exec", "postject", executablePath, "NODE_SEA_BLOB", preparationBlob, "--sentinel-fuse", seaFuse];
-  if (process.platform === "darwin") postjectArgs.push("--macho-segment-name", "NODE_SEA");
-  runChecked(process.execPath, postjectArgs);
-  if (process.platform === "darwin") runChecked("/usr/bin/codesign", ["--sign", "-", executablePath]);
-  await chmod(executablePath, 0o755);
-}
-
 async function main(): Promise<void> {
   const target = requireTargetPlatform(platform);
   const artifactRoot = join(spikeRoot, ".artifacts", "packaging", target);
@@ -140,17 +109,20 @@ async function main(): Promise<void> {
   await mkdir(artifactRoot, { recursive: true });
 
   const hostBundle = join(artifactRoot, "host-node", "navact-runtime.cjs");
-  await mkdir(dirname(hostBundle), { recursive: true });
-  await build({
-    entryPoints: [join(spikeRoot, "src", "mcp-health-entry.ts")],
-    outfile: hostBundle,
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    target: "node24",
-    sourcemap: false,
-    logLevel: "warning",
-  });
+  const executableName = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  const seaExecutable = join(artifactRoot, "self-contained", executableName);
+  let constructionError: unknown;
+  try {
+    await buildSelfContainedRuntime({
+      entryPoint: join(spikeRoot, "src", "mcp-health-entry.ts"),
+      hostBundlePath: hostBundle,
+      outputPath: seaExecutable,
+      workingDirectory: artifactRoot,
+      runtimeBuildId: "packaging-baseline",
+    });
+  } catch (error) {
+    constructionError = error;
+  }
 
   const cleanEnvironment = environmentWithoutPath();
   const control = await exerciseVariant({
@@ -164,11 +136,9 @@ async function main(): Promise<void> {
     },
   });
 
-  const executableName = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
-  const seaExecutable = join(artifactRoot, "self-contained", executableName);
   let candidate: PackagingVariantReport;
   try {
-    await createSeaExecutable(hostBundle, seaExecutable, artifactRoot);
+    if (constructionError !== undefined) throw constructionError;
     candidate = await exerciseVariant({
       kind: "self-contained",
       artifactPath: seaExecutable,
