@@ -1,0 +1,24 @@
+{
+  "name": "@navact/architecture-spikes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "verify": "pnpm build && pnpm typecheck && pnpm test",
+    "build:runtime": "pnpm build && node dist/scripts/build-runtime.js",
+    "write:artifact-decision": "pnpm build && node dist/scripts/write-artifact-decision.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "esbuild": "^0.28.1",
+    "postject": "1.0.0-alpha.6",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

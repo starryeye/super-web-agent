@@ -1,0 +1,14 @@
+{
+  "name": "navact",
+  "private": true,
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": ">=24.14.0 <25"
+  },
+  "scripts": {
+    "spikes:build": "pnpm -C spikes build",
+    "spikes:test": "pnpm -C spikes test",
+    "spikes:typecheck": "pnpm -C spikes typecheck",
+    "spikes:verify": "pnpm -C spikes verify"
+  }
+}

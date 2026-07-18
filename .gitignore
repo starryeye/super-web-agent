@@ -1,3 +1,7 @@
 .worktrees/
+.superpowers/
+node_modules/
+spikes/dist/
+spikes/.artifacts/
 
 docs/superpowers/
