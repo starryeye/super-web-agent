@@ -132,6 +132,189 @@ it.each([
   expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
 });
 
+type RawReport = Record<string, unknown>;
+
+function rawPassingReport(): RawReport {
+  return structuredClone(passingReport("claude-code", "darwin-arm64")) as unknown as RawReport;
+}
+
+function nestedObject(report: RawReport, ...keys: string[]): Record<string, unknown> {
+  let current: unknown = report;
+  for (const key of keys) current = (current as Record<string, unknown>)[key];
+  return current as Record<string, unknown>;
+}
+
+const exactKeyObjects: readonly [string, (report: RawReport) => Record<string, unknown>, string][] = [
+  ["root", (report) => report, "host"],
+  ["runtimeArtifacts", (report) => nestedObject(report, "runtimeArtifacts"), "0.0.1"],
+  ["Runtime 0.0.1 artifact", (report) => nestedObject(report, "runtimeArtifacts", "0.0.1"), "sha256"],
+  ["Runtime 0.0.2 artifact", (report) => nestedObject(report, "runtimeArtifacts", "0.0.2"), "bytes"],
+  ["initial phase", (report) => nestedObject(report, "initial"), "pid"],
+  ["update phase", (report) => nestedObject(report, "update"), "pid"],
+  ["crash recovery phase", (report) => nestedObject(report, "crashRecovery"), "recoveredPid"],
+  ["removal phase", (report) => nestedObject(report, "removal"), "pluginRemoved"],
+];
+
+it.each(exactKeyObjects)("rejects a missing key in %s", (_name, select, key) => {
+  const report = rawPassingReport();
+  delete select(report)[key];
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each(exactKeyObjects)("rejects an unknown key in %s", (_name, select) => {
+  const report = rawPassingReport();
+  select(report).unexpected = true;
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["schema version", (report: RawReport) => { report.schemaVersion = 2; }],
+  ["runtime version", (report: RawReport) => { report.runtimeVersion = "0.0.0"; }],
+  ["host", (report: RawReport) => { report.host = "other"; }],
+  ["platform", (report: RawReport) => { report.platform = "linux-x64"; }],
+  ["equal Runtime digests", (report: RawReport) => { nestedObject(report, "runtimeArtifacts", "0.0.2").sha256 = "a".repeat(64); }],
+  ["reversed plugin versions", (report: RawReport) => { report.pluginVersions = ["0.0.2", "0.0.1"]; }],
+] as const)("rejects invalid exact lifecycle metadata: %s", (_name, mutate) => {
+  const report = rawPassingReport();
+  mutate(report);
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["0.0.1", 0],
+  ["0.0.1", Number.MAX_SAFE_INTEGER + 1],
+  ["0.0.2", 0],
+  ["0.0.2", Number.MAX_SAFE_INTEGER + 1],
+] as const)("rejects invalid Runtime %s byte count", (version, bytes) => {
+  const report = rawPassingReport();
+  nestedObject(report, "runtimeArtifacts", version).bytes = bytes;
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["installUserSteps", -1],
+  ["installUserSteps", Number.MAX_SAFE_INTEGER + 1],
+  ["updateUserSteps", -1],
+  ["updateUserSteps", Number.MAX_SAFE_INTEGER + 1],
+  ["removalUserSteps", -1],
+  ["removalUserSteps", Number.MAX_SAFE_INTEGER + 1],
+  ["manualConfigEdits", -1],
+  ["manualConfigEdits", Number.MAX_SAFE_INTEGER + 1],
+] as const)("rejects invalid non-negative count %s", (field, value) => {
+  const report = rawPassingReport();
+  report[field] = value;
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["initial.startupLatencyMs", ["initial", "startupLatencyMs"], -1],
+  ["initial.startupLatencyMs", ["initial", "startupLatencyMs"], Number.POSITIVE_INFINITY],
+  ["initial.healthLatencyMs", ["initial", "healthLatencyMs"], -1],
+  ["initial.healthLatencyMs", ["initial", "healthLatencyMs"], Number.POSITIVE_INFINITY],
+] as const)("rejects invalid latency %s", (_name, [phase, field], value) => {
+  const report = rawPassingReport();
+  nestedObject(report, phase)[field] = value;
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["initial", "pid"],
+  ["update", "pid"],
+  ["crashRecovery", "recoveredPid"],
+] as const)("rejects zero, negative, and unsafe %s.%s", (phase, field) => {
+  for (const value of [0, -1, Number.MAX_SAFE_INTEGER + 1]) {
+    const report = rawPassingReport();
+    nestedObject(report, phase)[field] = value;
+    expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+  }
+});
+
+it.each([
+  ["administratorPrivilegesRequested", []],
+  ["separateInstallerUsed", []],
+  ["hostNodeRequired", []],
+  ["healthPassed", ["initial"]],
+  ["cleanStopPassed", ["initial"]],
+  ["launchedFromHostCache", ["initial"]],
+  ["healthPassed", ["update"]],
+  ["cleanStopPassed", ["update"]],
+  ["launchedFromHostCache", ["update"]],
+  ["crashObserved", ["crashRecovery"]],
+  ["sameSessionRestartObserved", ["crashRecovery"]],
+  ["freshSessionRecoveryPassed", ["crashRecovery"]],
+  ["reinstallRequired", ["crashRecovery"]],
+  ["launchedFromHostCache", ["crashRecovery"]],
+  ["pluginRemoved", ["removal"]],
+  ["marketplaceRemoved", ["removal"]],
+  ["noLiveRuntime", ["removal"]],
+] as const)("rejects non-boolean %s", (field, path) => {
+  const report = rawPassingReport();
+  nestedObject(report, ...path)[field] = "true";
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["hostVersion", []],
+  ["observedRuntimeBuildId", ["initial"]],
+  ["observedRuntimeBuildId", ["update"]],
+  ["observedPluginVersion", ["update"]],
+  ["observedRuntimeBuildId", ["crashRecovery"]],
+] as const)("rejects empty required string %s", (field, path) => {
+  const report = rawPassingReport();
+  nestedObject(report, ...path)[field] = "";
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["runtime 0.0.1", ["runtimeArtifacts", "0.0.1"], "sha256"],
+  ["runtime 0.0.2", ["runtimeArtifacts", "0.0.2"], "sha256"],
+  ["initial", ["initial"], "observedRuntimeSha256"],
+  ["update", ["update"], "observedRuntimeSha256"],
+  ["crash recovery", ["crashRecovery"], "observedRuntimeSha256"],
+] as const)("rejects an empty digest in %s", (_name, path, field) => {
+  const report = rawPassingReport();
+  nestedObject(report, ...path)[field] = "";
+  expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
+});
+
+it.each([
+  ["update health", (report: PluginLifecycleHostReport) => { report.update.healthPassed = false; }, "plugin update did not launch Runtime build 0.0.2 cleanly"],
+  ["update clean stop", (report: PluginLifecycleHostReport) => { report.update.cleanStopPassed = false; }, "plugin update did not launch Runtime build 0.0.2 cleanly"],
+  ["recovery health", (report: PluginLifecycleHostReport) => { report.crashRecovery.freshSessionRecoveryPassed = false; }, "fresh-session recovery did not launch Runtime build 0.0.2 cleanly"],
+  ["recovery digest", (report: PluginLifecycleHostReport) => { report.crashRecovery.observedRuntimeSha256 = "c".repeat(64); }, "fresh-session recovery did not launch Runtime build 0.0.2 cleanly"],
+  ["marketplace removal", (report: PluginLifecycleHostReport) => { report.removal.marketplaceRemoved = false; }, "plugin or marketplace removal failed"],
+  ["first recorded error", (report: PluginLifecycleHostReport) => { report.errors = ["first error", "second error"]; }, "first error"],
+] as const)("covers the remaining gate condition: %s", (_name, mutate, reason) => {
+  const report = parsedPassingReport();
+  mutate(report);
+  expect(evaluatePluginLifecycleHostReport(report)).toEqual({ gate: "fail", reason });
+});
+
+const orderedGateMutations: readonly [(report: PluginLifecycleHostReport) => void, string][] = [
+  [(report) => { report.manualConfigEdits = 1; }, "manual MCP configuration was required"],
+  [(report) => { report.administratorPrivilegesRequested = true; }, "administrator privileges were requested"],
+  [(report) => { report.separateInstallerUsed = true; }, "a separate installer was used"],
+  [(report) => { report.hostNodeRequired = true; }, "the Runtime required Host Node"],
+  [(report) => { report.initial.launchedFromHostCache = false; }, "the Runtime launched outside the installed host plugin cache"],
+  [(report) => { report.initial.healthPassed = false; }, "initial plugin did not launch Runtime build 0.0.1 cleanly"],
+  [(report) => { report.update.healthPassed = false; }, "plugin update did not launch Runtime build 0.0.2 cleanly"],
+  [(report) => { report.crashRecovery.crashObserved = false; }, "Runtime crash was not observed"],
+  [(report) => { report.crashRecovery.freshSessionRecoveryPassed = false; }, "fresh-session recovery did not launch Runtime build 0.0.2 cleanly"],
+  [(report) => { report.removal.noLiveRuntime = false; }, "plugin removal left a live Runtime"],
+  [(report) => { report.removal.marketplaceRemoved = false; }, "plugin or marketplace removal failed"],
+  [(report) => { report.removal.navactOwnedResiduePaths = ["/tmp/navact"]; }, "Navact-owned residue remained outside host-managed roots"],
+  [(report) => { report.errors = ["first error", "second error"]; }, "first error"],
+];
+
+it.each(orderedGateMutations.map((_, index) => [index + 1]))(
+  "returns gate reason %i before every lower-priority simultaneous failure",
+  (priority) => {
+    const report = parsedPassingReport();
+    for (const [mutate] of orderedGateMutations.slice(priority - 1)) mutate(report);
+    expect(evaluatePluginLifecycleHostReport(report)).toEqual({ gate: "fail", reason: orderedGateMutations[priority - 1]![1] });
+  },
+);
+
 it.each([
   ["unknown top-level key", (report: Record<string, unknown>) => { report.extra = true; }],
   ["missing top-level key", (report: Record<string, unknown>) => { delete report.host; }],
