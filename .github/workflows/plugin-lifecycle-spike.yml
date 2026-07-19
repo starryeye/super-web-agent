@@ -1,0 +1,162 @@
+name: Plugin lifecycle spike
+
+on:
+  workflow_dispatch:
+
+jobs:
+  runtime-artifact:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: windows-2025
+            target: win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm spikes:verify
+      - run: pnpm -C spikes build:runtime
+      - run: pnpm -C spikes build:plugin-lifecycle-fixtures ".artifacts/plugin-lifecycle/${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: runtime-artifact-${{ matrix.target }}
+          path: |
+            spikes/.artifacts/packaging/${{ matrix.target }}/
+            spikes/.artifacts/plugin-lifecycle/${{ matrix.target }}/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  claude-lifecycle:
+    needs: runtime-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: windows-2025
+            target: win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-artifact-${{ matrix.target }}
+          path: .
+      - name: Install and resolve Claude Code CLI
+        id: host-cli
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) { throw "matching API key is required" }
+          pnpm add --prefix spikes/.artifacts/host-cli/claude-code @anthropic-ai/claude-code@2.1.197
+          $cli = pnpm -C spikes resolve:host-cli "spikes/.artifacts/host-cli/claude-code" "@anthropic-ai/claude-code" "claude"
+          "cli=$cli" >> $env:GITHUB_OUTPUT
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Run Claude lifecycle harness
+        run: pnpm -C spikes run:plugin-lifecycle claude-code "${{ steps.host-cli.outputs.cli }}" "${{ github.workspace }}/spikes/.artifacts/plugin-lifecycle/${{ matrix.target }}" "${{ github.workspace }}/spikes/.artifacts/reports/claude-code-${{ matrix.target }}.json" "${{ github.workspace }}/spikes/.artifacts/projects/claude-code-${{ matrix.target }}"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: claude-lifecycle-${{ matrix.target }}
+          path: |
+            spikes/.artifacts/reports/claude-code-${{ matrix.target }}.json
+            spikes/.artifacts/reports/evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  codex-lifecycle:
+    needs: runtime-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: darwin-arm64
+          - runner: windows-2025
+            target: win32-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-artifact-${{ matrix.target }}
+          path: .
+      - name: Install and resolve Codex CLI
+        id: host-cli
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "matching API key is required" }
+          pnpm add --prefix spikes/.artifacts/host-cli/codex @openai/codex@0.145.0-alpha.23
+          $cli = pnpm -C spikes resolve:host-cli "spikes/.artifacts/host-cli/codex" "@openai/codex" "codex"
+          "cli=$cli" >> $env:GITHUB_OUTPUT
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - name: Run Codex lifecycle harness
+        run: pnpm -C spikes run:plugin-lifecycle codex "${{ steps.host-cli.outputs.cli }}" "${{ github.workspace }}/spikes/.artifacts/plugin-lifecycle/${{ matrix.target }}" "${{ github.workspace }}/spikes/.artifacts/reports/codex-${{ matrix.target }}.json" "${{ github.workspace }}/spikes/.artifacts/projects/codex-${{ matrix.target }}"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: codex-lifecycle-${{ matrix.target }}
+          path: |
+            spikes/.artifacts/reports/codex-${{ matrix.target }}.json
+            spikes/.artifacts/reports/evidence/
+          include-hidden-files: true
+          if-no-files-found: error
+
+  plugin-lifecycle-decision:
+    needs: [claude-lifecycle, codex-lifecycle]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: "*-lifecycle-*"
+          path: spikes/.artifacts/downloaded-reports
+          merge-multiple: true
+      - name: Calculate decision
+        run: pnpm -C spikes write:plugin-lifecycle-decision docs/decisions/0003-plugin-lifecycle-spike.md spikes/.artifacts/downloaded-reports/claude-code-darwin-arm64.json spikes/.artifacts/downloaded-reports/claude-code-win32-x64.json spikes/.artifacts/downloaded-reports/codex-darwin-arm64.json spikes/.artifacts/downloaded-reports/codex-win32-x64.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: plugin-lifecycle-decision
+          path: docs/decisions/0003-plugin-lifecycle-spike.md
+          include-hidden-files: true
+          if-no-files-found: error
