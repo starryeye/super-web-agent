@@ -148,7 +148,9 @@ async function renderHost(input: {
   await writeJson(join(descriptorDirectory, "plugin.json"), pluginManifest(input.host, input.version));
   await writeJson(join(pluginRoot, ".mcp.json"), mcpConfig(input.host, input.version));
   await writeFile(join(pluginRoot, "skills", "lifecycle-probe", "SKILL.md"), skill);
-  const marketplaceDirectory = join(hostRoot, input.host === "claude-code" ? ".claude-plugin" : ".agents", "plugins");
+  const marketplaceDirectory = input.host === "claude-code"
+    ? join(hostRoot, ".claude-plugin")
+    : join(hostRoot, ".agents", "plugins");
   await mkdir(marketplaceDirectory, { recursive: true });
   await writeJson(join(marketplaceDirectory, "marketplace.json"), {
     name: input.host === "claude-code" ? "navact-lifecycle-spike-claude" : "navact-lifecycle-spike-codex",
