@@ -22,7 +22,7 @@ it("orchestrates v1, v2, crash and fresh recovery without sensitive command outp
   const host: LifecycleHost = "claude-code";
   const adapter: PluginHostAdapter = {
     host, marketplaceName: "market", selector: "selector",
-    version: async () => ({ command: "claude --version", exitCode: 0, stdout: "secret output", stderr: "secret stderr", startedAtMs: 100, durationMs: 1 }),
+    version: async () => ({ command: "claude --version", exitCode: 0, stdout: "2.1.197", stderr: "secret stderr", startedAtMs: 100, durationMs: 1 }),
     addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); },
     update: async () => { calls.push("update"); return [observation("update")]; }, uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); },
     runPrompt: async (prompt) => { const phase = prompt.includes("initial-") ? "initial" : prompt.includes("updated-") ? "updated" : prompt.includes("fresh-") ? "fresh" : "crash"; calls.push(phase); return observation(phase); },
@@ -52,7 +52,7 @@ it("cleans up marketplace ownership in reverse order after a prompt failure", as
   const calls: string[] = [];
   const adapter: PluginHostAdapter = {
     host: "claude-code", marketplaceName: "market", selector: "selector",
-    version: async () => observation("version"), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); },
+    version: async () => ({ ...observation("version"), stdout: "2.1.197" }), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); },
     update: async () => [], runPrompt: async () => { calls.push("prompt"); throw Object.assign(new Error("no output retained"), { observation: { ...observation("prompt"), exitCode: 23 } }); },
     uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); },
   };
@@ -128,6 +128,19 @@ it("supports the Codex evidence cell with its own host and key", async () => {
   const report = await runHarness(host, fakeAdapter(host, []), validRuns(host));
   expect(report.host).toBe("codex");
   expect(report.errors).toEqual([]);
+});
+
+it.each([
+  ["claude-code", "2.1.196", "2.1.197"],
+  ["codex", "0.145.0-alpha.22", "0.145.0-alpha.23"],
+] as const)("rejects a %s host CLI version mismatch before plugin installation", async (host, actual, expected) => {
+  const calls: string[] = [];
+  const adapter = fakeAdapter(host, calls);
+  adapter.version = async () => ({ ...observation("version"), stdout: actual });
+  const report = await runHarness(host, adapter, validRuns(host));
+  expect(report.hostVersion).toBe(actual);
+  expect(report.errors).toEqual([`expected ${expected} host CLI version`]);
+  expect(calls).toEqual([]);
 });
 
 it("uses only non-signalling process probes and treats a missing PID as exited", async () => {
@@ -219,7 +232,7 @@ function validRuns(host: LifecycleHost): Record<string, LifecycleEvent[]> {
 }
 
 function fakeAdapter(host: LifecycleHost, calls: string[]): PluginHostAdapter {
-  return { host, marketplaceName: "market", selector: "selector", version: async () => observation("version"), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); }, update: async () => { calls.push("update"); return [observation("update")]; }, runPrompt: async (prompt) => { const phase = prompt.includes("initial-") ? "initial" : prompt.includes("updated-") ? "updated" : prompt.includes("fresh-") ? "fresh" : "crash"; calls.push(phase); return observation(phase); }, uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); } };
+  return { host, marketplaceName: "market", selector: "selector", version: async () => ({ ...observation("version"), stdout: host === "claude-code" ? "2.1.197" : "0.145.0-alpha.23" }), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); }, update: async () => { calls.push("update"); return [observation("update")]; }, runPrompt: async (prompt) => { const phase = prompt.includes("initial-") ? "initial" : prompt.includes("updated-") ? "updated" : prompt.includes("fresh-") ? "fresh" : "crash"; calls.push(phase); return observation(phase); }, uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); } };
 }
 async function runHarness(host: LifecycleHost, adapter: PluginHostAdapter, runs: Record<string, LifecycleEvent[]>, extra: Partial<PluginLifecycleHarnessDependencies> = {}) {
   return runPluginLifecycle({ host, cliLaunch: { displayName: host === "claude-code" ? "claude" : "codex", executable: "/host/cli", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: host === "claude-code" ? { ANTHROPIC_API_KEY: "present" } : { OPENAI_API_KEY: "present" } }, { createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: currentPlatform, versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }), readEvents: async (_path: string, runId: string) => runs[runId] ?? [], sha256File: async (path: string) => path.includes("0.0.1") ? digest1 : digest2, resolveRealpath: async (path: string) => path, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], findNavactOwnedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {}, ...extra });

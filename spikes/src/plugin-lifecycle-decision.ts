@@ -104,7 +104,10 @@ function markdownRows(reports: readonly PluginLifecycleHostReport[]): string[] {
     const v1 = report.runtimeArtifacts["0.0.1"];
     const v2 = report.runtimeArtifacts["0.0.2"];
     const gate = evaluatePluginLifecycleHostReport(report).gate;
-    return `| ${name} | ${platform} | ${report.hostVersion} | ${v1.bytes} / ${v1.sha256.slice(0, 8)} | ${v2.bytes} / ${v2.sha256.slice(0, 8)} | ${report.initial.startupLatencyMs.toFixed(2)} | ${report.initial.healthLatencyMs.toFixed(2)} | ${report.update.observedRuntimeBuildId === "0.0.2" ? "yes" : "no"} | ${report.crashRecovery.freshSessionRecoveryPassed ? "fresh session" : "no"} | ${report.removal.noLiveRuntime ? "yes" : "no"} | ${gate} |`;
+    const updatePassed = report.update.healthPassed && report.update.cleanStopPassed && report.update.launchedFromHostCache && report.update.observedPluginVersion === "0.0.2" && report.update.observedRuntimeBuildId === "0.0.2" && report.update.observedRuntimeSha256 === v2.sha256;
+    const recoveryPassed = report.crashRecovery.crashObserved && report.crashRecovery.freshSessionRecoveryPassed && !report.crashRecovery.reinstallRequired && report.crashRecovery.launchedFromHostCache && report.crashRecovery.observedRuntimeBuildId === "0.0.2" && report.crashRecovery.observedRuntimeSha256 === v2.sha256;
+    const removalPassed = report.removal.pluginRemoved && report.removal.marketplaceRemoved && report.removal.noLiveRuntime && report.removal.navactOwnedResiduePaths.length === 0;
+    return `| ${name} | ${platform} | ${report.hostVersion} | ${v1.bytes} / ${v1.sha256.slice(0, 8)} | ${v2.bytes} / ${v2.sha256.slice(0, 8)} | ${report.initial.startupLatencyMs.toFixed(2)} | ${report.initial.healthLatencyMs.toFixed(2)} | ${updatePassed ? "yes" : "no"} | ${recoveryPassed ? "yes" : "no"} | ${removalPassed ? "yes" : "no"} | ${gate} |`;
   });
 }
 

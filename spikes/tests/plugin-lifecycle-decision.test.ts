@@ -134,7 +134,7 @@ it("renders non-gating restart and host residue observations as follow-ups", () 
   expect(markdown).toContain("Status: Accepted");
   expect(markdown).toContain("codex/win32-x64: host-managed cache residue recorded");
   expect(markdown).not.toContain("codex/win32-x64: same-session crash restart was not observed");
-  expect(markdown).toContain("| Claude Code | darwin-arm64 | 2.1.197 | 100000 / aaaaaaaa | 100100 / bbbbbbbb | 12.50 | 34.50 | yes | fresh session | yes | pass |");
+  expect(markdown).toContain("| Claude Code | darwin-arm64 | 2.1.197 | 100000 / aaaaaaaa | 100100 / bbbbbbbb | 12.50 | 34.50 | yes | yes | yes | pass |");
   expect(markdown).toContain("separate localhost pairing/security spike");
   expect(markdown).toContain("does not approve production signing, localhost pairing, Chrome Extension behavior, browser automation, Page Model, actions, policy, benchmarks, or release-readiness claims");
 });
@@ -149,7 +149,7 @@ it("never renders command output, errors, or absolute evidence paths", () => {
   expect(markdown).not.toContain("/private/tmp/navact-lifecycle-spike");
 });
 
-it("rejects malformed existing writer input and calculates absent input as Incomplete", async () => {
+it("writes a sanitized deterministic Rejected ADR for malformed existing writer input", async () => {
   const directory = await mkdtemp(join(tmpdir(), "navact-decision-"));
   const output = join(directory, "decision.md");
   const inputs = ["claude-mac.json", "claude-windows.json", "codex-mac.json", "codex-windows.json"].map((name) => join(directory, name));
@@ -157,7 +157,11 @@ it("rejects malformed existing writer input and calculates absent input as Incom
     await writeFile(inputs[0]!, "{not-json");
     const malformed = await runWriter([output, ...inputs]);
     expect(malformed.code).toBe(1);
-    expect(malformed.stderr).toContain("SyntaxError");
+    const rejected = await readFile(output, "utf8");
+    expect(rejected).toContain("Status: Rejected");
+    expect(rejected).toContain("malformed plugin lifecycle evidence");
+    expect(rejected).not.toContain("{not-json");
+    expect(malformed.stderr).not.toContain("SyntaxError");
     await writeFile(inputs[0]!, JSON.stringify(passingReport("claude-code", "darwin-arm64")));
     const incomplete = await runWriter([output, ...inputs]);
     expect(incomplete.code).toBe(2);
@@ -165,6 +169,20 @@ it("rejects malformed existing writer input and calculates absent input as Incom
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+it("renders failed update, recovery, and removal cells using complete phase predicates", () => {
+  const reports = allPassingReports();
+  reports[0]!.update.cleanStopPassed = false;
+  reports[0]!.errors = ["update cleanup failed"];
+  reports[1]!.crashRecovery.reinstallRequired = true;
+  reports[1]!.errors = ["reinstall required"];
+  reports[2]!.removal.pluginRemoved = false;
+  reports[2]!.errors = ["plugin remained"];
+  const markdown = renderPluginLifecycleDecision(reports);
+  expect(markdown).toContain("| Claude Code | darwin-arm64 | 2.1.197 | 100000 / aaaaaaaa | 100100 / bbbbbbbb | 12.50 | 34.50 | no | yes | yes | fail |");
+  expect(markdown).toContain("| Claude Code | win32-x64 | 2.1.197 | 100000 / cccccccc | 100100 / dddddddd | 12.50 | 34.50 | yes | no | yes | fail |");
+  expect(markdown).toContain("| Codex | darwin-arm64 | 0.145.0-alpha.23 | 100000 / aaaaaaaa | 100100 / bbbbbbbb | 12.50 | 34.50 | yes | yes | no | fail |");
 });
 
 it("writes a calculated Rejected decision and exits 1 for a failed existing cell", async () => {
@@ -194,15 +212,19 @@ it("enforces the manual-only workflow topology and safe host CLI setup", async (
   expect(workflow).toContain("pnpm install --frozen-lockfile");
   expect(workflow).toContain("runtime-artifact-${{ matrix.target }}");
   expect(workflow).toContain("spikes/.artifacts/packaging/${{ matrix.target }}/");
-  expect(workflow).toContain(".artifacts/plugin-lifecycle/${{ matrix.target }}");
-  expect(workflow).toContain(".artifacts/plugin-lifecycle/${{ matrix.target }}");
+  expect(workflow).toContain("spikes/.artifacts/plugin-lifecycle/${{ matrix.target }}/");
+  expect(workflow.match(/path: spikes\/\.artifacts$/gm)).toHaveLength(2);
   expect(workflow).toContain("if: always()");
   expect(workflow).toContain("include-hidden-files: true");
   expect(workflow).toContain("if-no-files-found: error");
   expect(workflow).toContain("@anthropic-ai/claude-code@2.1.197");
   expect(workflow).toContain("@openai/codex@0.145.0-alpha.23");
   expect(workflow).toContain("shell: pwsh");
-  expect(workflow).toContain("resolve:host-cli");
+  expect(workflow).toContain("pnpm -C spikes build");
+  expect(workflow).toContain("$cli = pnpm --silent -C spikes resolve:host-cli \".artifacts/host-cli/claude-code\"");
+  expect(workflow).toContain("$cli = pnpm --silent -C spikes resolve:host-cli \".artifacts/host-cli/codex\"");
+  expect(workflow).toContain("../docs/decisions/0003-plugin-lifecycle-spike.md .artifacts/downloaded-reports/claude-code-darwin-arm64.json");
+  expect(workflow).toContain("path: docs/decisions/0003-plugin-lifecycle-spike.md");
   expect(workflow).not.toMatch(/\.cmd|\.bat|shell:\s*true|npm\s+(install|i)\s+-g/);
   expect(workflow).not.toMatch(/ANTHROPIC_API_KEY.*OPENAI_API_KEY|OPENAI_API_KEY.*ANTHROPIC_API_KEY/);
   expect(workflow.match(/continue-on-error: true/g)).toHaveLength(1);

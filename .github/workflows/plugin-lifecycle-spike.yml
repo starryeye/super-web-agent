@@ -59,14 +59,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: runtime-artifact-${{ matrix.target }}
-          path: .
+          path: spikes/.artifacts
       - name: Install and resolve Claude Code CLI
         id: host-cli
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) { throw "matching API key is required" }
           pnpm add --prefix spikes/.artifacts/host-cli/claude-code @anthropic-ai/claude-code@2.1.197
-          $cli = pnpm -C spikes resolve:host-cli "spikes/.artifacts/host-cli/claude-code" "@anthropic-ai/claude-code" "claude"
+          pnpm -C spikes build
+          $cli = pnpm --silent -C spikes resolve:host-cli ".artifacts/host-cli/claude-code" "@anthropic-ai/claude-code" "claude"
+          if (($cli -split "`n").Where({ $_.Length -gt 0 }).Count -ne 1 -or -not [System.IO.Path]::IsPathRooted($cli.Trim())) { throw "host CLI resolver returned an invalid target" }
           "cli=$cli" >> $env:GITHUB_OUTPUT
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -107,14 +109,16 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: runtime-artifact-${{ matrix.target }}
-          path: .
+          path: spikes/.artifacts
       - name: Install and resolve Codex CLI
         id: host-cli
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { throw "matching API key is required" }
           pnpm add --prefix spikes/.artifacts/host-cli/codex @openai/codex@0.145.0-alpha.23
-          $cli = pnpm -C spikes resolve:host-cli "spikes/.artifacts/host-cli/codex" "@openai/codex" "codex"
+          pnpm -C spikes build
+          $cli = pnpm --silent -C spikes resolve:host-cli ".artifacts/host-cli/codex" "@openai/codex" "codex"
+          if (($cli -split "`n").Where({ $_.Length -gt 0 }).Count -ne 1 -or -not [System.IO.Path]::IsPathRooted($cli.Trim())) { throw "host CLI resolver returned an invalid target" }
           "cli=$cli" >> $env:GITHUB_OUTPUT
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -152,7 +156,7 @@ jobs:
           path: spikes/.artifacts/downloaded-reports
           merge-multiple: true
       - name: Calculate decision
-        run: pnpm -C spikes write:plugin-lifecycle-decision docs/decisions/0003-plugin-lifecycle-spike.md spikes/.artifacts/downloaded-reports/claude-code-darwin-arm64.json spikes/.artifacts/downloaded-reports/claude-code-win32-x64.json spikes/.artifacts/downloaded-reports/codex-darwin-arm64.json spikes/.artifacts/downloaded-reports/codex-win32-x64.json
+        run: pnpm -C spikes write:plugin-lifecycle-decision ../docs/decisions/0003-plugin-lifecycle-spike.md .artifacts/downloaded-reports/claude-code-darwin-arm64.json .artifacts/downloaded-reports/claude-code-win32-x64.json .artifacts/downloaded-reports/codex-darwin-arm64.json .artifacts/downloaded-reports/codex-win32-x64.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:

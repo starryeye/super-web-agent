@@ -12,7 +12,7 @@
     "write:plugin-lifecycle-decision": "pnpm build && node dist/scripts/write-plugin-lifecycle-decision.js",
     "write:artifact-decision": "pnpm build && node dist/scripts/write-artifact-decision.js",
     "run:plugin-lifecycle": "pnpm build && node dist/scripts/run-plugin-lifecycle.js",
-    "resolve:host-cli": "pnpm build && node dist/scripts/resolve-host-cli.js"
+    "resolve:host-cli": "node dist/scripts/resolve-host-cli.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

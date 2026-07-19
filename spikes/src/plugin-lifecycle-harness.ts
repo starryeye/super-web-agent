@@ -39,6 +39,7 @@ function inside(path: string, root: string): boolean { const value = relative(ro
 function cacheRoot(host: LifecycleHost): string { return join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "cache"); }
 function requireAbsolutePaths(input: PluginLifecycleHarnessInput): void { for (const value of [input.fixtureOutputRoot, input.projectDirectory, input.evidenceDirectory, input.cliLaunch.executable, ...input.cliLaunch.prefixArgs]) if (!isAbsolute(value)) throw new Error("lifecycle paths must be absolute"); }
 function hostVersion(observation: CommandObservation): string { return observation.stdout.match(/\d+\.\d+(?:\.\d+)?(?:[-+][a-z0-9.-]+)?/i)?.[0] ?? "unavailable"; }
+function expectedHostVersion(host: LifecycleHost): string { return host === "claude-code" ? "2.1.197" : "0.145.0-alpha.23"; }
 function eventError(): never { throw new Error("invalid lifecycle journal"); }
 function validateJournal(events: LifecycleEvent[], host: LifecycleHost, target: string, runId: string, expectedVersion: Version): void {
   let previousAt = -1; const sequences = new Map<number, number>();
@@ -87,6 +88,7 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
   };
   try {
     const version = await adapter.version(input.projectDirectory); commands.push(version.command); report.hostVersion = hostVersion(version);
+    if (report.hostVersion !== expectedHostVersion(input.host)) { errors.push(`expected ${expectedHostVersion(input.host)} host CLI version`); return parsePluginLifecycleHostReport(report); }
     const active = await d.activateFixture({ outputRoot: input.fixtureOutputRoot, host: input.host, version: "0.0.1" }); const add = await adapter.addMarketplace(active, input.projectDirectory); commands.push(add.command); ownsMarketplace = true;
     const install = await adapter.install(input.projectDirectory); commands.push(install.command); ownsPlugin = true;
     const initialId = `initial-${input.host}`; const initial = await prompt(initialId, "0.0.1", healthPrompt(initialId)); for (const event of initial.events) pids.add(event.pid); const first = await verifyPhase({ d, host: input.host, target, events: initial.events, nonce: initialId, expectedVersion: "0.0.1", command: initial.command, priorPids: new Set() });
