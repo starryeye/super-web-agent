@@ -81,6 +81,8 @@ it.each([
   ["separate installer", (report: PluginLifecycleHostReport) => { report.separateInstallerUsed = true; }, "a separate installer was used"],
   ["Host Node", (report: PluginLifecycleHostReport) => { report.hostNodeRequired = true; }, "the Runtime required Host Node"],
   ["outside-cache launch", (report: PluginLifecycleHostReport) => { report.initial.launchedFromHostCache = false; }, "the Runtime launched outside the installed host plugin cache"],
+  ["update outside-cache launch", (report: PluginLifecycleHostReport) => { report.update.launchedFromHostCache = false; }, "the Runtime launched outside the installed host plugin cache"],
+  ["recovery outside-cache launch", (report: PluginLifecycleHostReport) => { report.crashRecovery.launchedFromHostCache = false; }, "the Runtime launched outside the installed host plugin cache"],
   ["initial failed health", (report: PluginLifecycleHostReport) => { report.initial.healthPassed = false; }, "initial plugin did not launch Runtime build 0.0.1 cleanly"],
   ["initial unclean stop", (report: PluginLifecycleHostReport) => { report.initial.cleanStopPassed = false; }, "initial plugin did not launch Runtime build 0.0.1 cleanly"],
   ["initial wrong build", (report: PluginLifecycleHostReport) => { report.initial.observedRuntimeBuildId = "0.0.2"; }, "initial plugin did not launch Runtime build 0.0.1 cleanly"],
@@ -120,6 +122,7 @@ it.each([
   ["empty command entry", (report: PluginLifecycleHostReport) => { report.commands = [""]; }],
   ["empty error entry", (report: PluginLifecycleHostReport) => { report.errors = [""]; report.initial.healthPassed = false; }],
   ["empty residue entry", (report: PluginLifecycleHostReport) => { report.removal.hostManagedResiduePaths = [""]; }],
+  ["empty Navact-owned residue entry", (report: PluginLifecycleHostReport) => { report.removal.navactOwnedResiduePaths = [""]; }],
   ["non-finite bytes", (report: PluginLifecycleHostReport) => { report.runtimeArtifacts["0.0.1"].bytes = JSON.parse("1e400") as number; }],
   ["non-finite latency", (report: PluginLifecycleHostReport) => { report.initial.startupLatencyMs = JSON.parse("1e400") as number; }],
   ["invalid PID", (report: PluginLifecycleHostReport) => { report.initial.pid = 0; }],
@@ -182,8 +185,10 @@ it.each([
 
 it.each([
   ["0.0.1", 0],
+  ["0.0.1", 1.5],
   ["0.0.1", Number.MAX_SAFE_INTEGER + 1],
   ["0.0.2", 0],
+  ["0.0.2", 1.5],
   ["0.0.2", Number.MAX_SAFE_INTEGER + 1],
 ] as const)("rejects invalid Runtime %s byte count", (version, bytes) => {
   const report = rawPassingReport();
@@ -193,12 +198,16 @@ it.each([
 
 it.each([
   ["installUserSteps", -1],
+  ["installUserSteps", 1.5],
   ["installUserSteps", Number.MAX_SAFE_INTEGER + 1],
   ["updateUserSteps", -1],
+  ["updateUserSteps", 1.5],
   ["updateUserSteps", Number.MAX_SAFE_INTEGER + 1],
   ["removalUserSteps", -1],
+  ["removalUserSteps", 1.5],
   ["removalUserSteps", Number.MAX_SAFE_INTEGER + 1],
   ["manualConfigEdits", -1],
+  ["manualConfigEdits", 1.5],
   ["manualConfigEdits", Number.MAX_SAFE_INTEGER + 1],
 ] as const)("rejects invalid non-negative count %s", (field, value) => {
   const report = rawPassingReport();
@@ -222,7 +231,7 @@ it.each([
   ["update", "pid"],
   ["crashRecovery", "recoveredPid"],
 ] as const)("rejects zero, negative, and unsafe %s.%s", (phase, field) => {
-  for (const value of [0, -1, Number.MAX_SAFE_INTEGER + 1]) {
+  for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const report = rawPassingReport();
     nestedObject(report, phase)[field] = value;
     expect(() => parsePluginLifecycleHostReport(report)).toThrow("invalid plugin lifecycle host report");
