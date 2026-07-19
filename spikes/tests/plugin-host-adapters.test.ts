@@ -88,3 +88,13 @@ it("rejects a bin symlink escaping the real package root and a directory target"
   await writeFile(join(root, "package.json"), JSON.stringify({ bin: "bin" }));
   await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("not a regular file");
 });
+
+it("preserves Claude's successful marketplace update when the plugin update runner rejects", async () => {
+  let call = 0;
+  const adapter = createPluginHostAdapter("claude-code", { displayName: "claude", executable: "/host/claude", prefixArgs: [] }, async (input) => {
+    call += 1; const value = { command: [input.displayName, ...input.args].join(" "), exitCode: 0, stdout: "", stderr: "", startedAtMs: 1, durationMs: 1 };
+    if (call === 2) throw Object.assign(new Error("failed"), { observation: { ...value, exitCode: 7 } });
+    return value;
+  });
+  await expect(adapter.update("/project")).rejects.toMatchObject({ partialObservations: [{ command: "claude plugin marketplace update navact-lifecycle-spike-claude" }] });
+});

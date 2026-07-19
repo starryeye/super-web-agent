@@ -39,9 +39,13 @@ export function createPluginHostAdapter(host: LifecycleHost, cliLaunch: HostCliL
     version: (cwd) => call(["--version"], cwd),
     addMarketplace: (root, cwd) => call(claude ? ["plugin", "marketplace", "add", root] : ["plugin", "marketplace", "add", root, "--json"], cwd),
     install: (cwd) => call(claude ? ["plugin", "install", selector, "--scope", "user"] : ["plugin", "add", selector, "--json"], cwd),
-    update: async (cwd) => claude
-      ? [await call(["plugin", "marketplace", "update", marketplaceName], cwd), await call(["plugin", "update", selector, "--scope", "user"], cwd)]
-      : [await call(["plugin", "add", selector, "--json"], cwd)],
+    update: async (cwd) => {
+      if (!claude) return [await call(["plugin", "add", selector, "--json"], cwd)];
+      const observations = [await call(["plugin", "marketplace", "update", marketplaceName], cwd)];
+      try { observations.push(await call(["plugin", "update", selector, "--scope", "user"], cwd)); }
+      catch (error) { throw Object.assign(error instanceof Error ? error : new Error("host command failed"), { partialObservations: observations }); }
+      return observations;
+    },
     runPrompt: (prompt, cwd, env, allowFailure) => call(claude ? ["-p", prompt, "--output-format", "json", "--permission-mode", "dontAsk"] : ["exec", "--ephemeral", "--sandbox", "read-only", "-c", 'approval_policy="never"', "--json", prompt], cwd, env, allowFailure),
     uninstall: (cwd) => call(claude ? ["plugin", "uninstall", selector, "--scope", "user"] : ["plugin", "remove", selector, "--json"], cwd),
     removeMarketplace: (cwd) => call(claude ? ["plugin", "marketplace", "remove", marketplaceName] : ["plugin", "marketplace", "remove", marketplaceName, "--json"], cwd),
