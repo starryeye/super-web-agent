@@ -39,11 +39,11 @@ function requireAbsolutePaths(input: PluginLifecycleHarnessInput): void { for (c
 function commandFailure(error: unknown): string { const observation = typeof error === "object" && error !== null && "observation" in error ? (error as { observation?: CommandObservation }).observation : undefined; return observation === undefined ? "lifecycle operation failed" : `host command failed: ${observation.command} (${observation.exitCode})`; }
 function hostVersion(observation: CommandObservation): string { return observation.stdout.match(/\d+\.\d+(?:\.\d+)?(?:[-+][a-z0-9.-]+)?/i)?.[0] ?? "unavailable"; }
 function eventError(): never { throw new Error("invalid lifecycle journal"); }
-function validateJournal(events: LifecycleEvent[], host: LifecycleHost, target: string, expectedVersion: Version): void {
-  let previous = 0;
+function validateJournal(events: LifecycleEvent[], host: LifecycleHost, target: string, runId: string, expectedVersion: Version): void {
+  let previousAt = -1; let previousSequence = 0;
   for (const event of events) {
-    if (event.host !== host || event.platform !== target || event.runId === "" || event.observedAtMs < previous || !inside(event.executablePath, cacheRoot(host))) eventError();
-    previous = event.observedAtMs;
+    if (event.host !== host || event.platform !== target || event.runId !== runId || event.observedAtMs < previousAt || event.sequence <= previousSequence || !inside(event.executablePath, cacheRoot(host))) eventError();
+    previousAt = event.observedAtMs; previousSequence = event.sequence;
     if (event.pluginVersion !== expectedVersion || event.runtimeBuildId !== expectedVersion) eventError();
   }
 }
@@ -51,7 +51,7 @@ function requireEvent(events: LifecycleEvent[], name: LifecycleEventName, nonce?
 export function requireSingleEvent(events: LifecycleEvent[], name: LifecycleEventName): LifecycleEvent { return requireEvent(events, name); }
 function sameRuntime(a: LifecycleEvent, b: LifecycleEvent): boolean { return a.pid === b.pid && a.executablePath === b.executablePath; }
 async function verifyPhase(input: { d: PluginLifecycleHarnessDependencies; host: LifecycleHost; target: string; events: LifecycleEvent[]; nonce: string; expectedVersion: Version; command: CommandObservation; priorPids: Set<number>; priorPath?: string; }): Promise<{ started: LifecycleEvent; health: LifecycleEvent; digest: string; clean: boolean }> {
-  validateJournal(input.events, input.host, input.target, input.expectedVersion);
+  validateJournal(input.events, input.host, input.target, input.nonce, input.expectedVersion);
   const started = requireEvent(input.events, "started"); const health = requireEvent(input.events, "health", input.nonce);
   if (!sameRuntime(started, health) || (input.priorPath !== undefined && started.executablePath === input.priorPath) || input.priorPids.has(started.pid) || started.observedAtMs < input.command.startedAtMs || health.observedAtMs < started.observedAtMs) eventError();
   const digest = await input.d.sha256File(started.executablePath);
@@ -60,7 +60,7 @@ async function verifyPhase(input: { d: PluginLifecycleHarnessDependencies; host:
 }
 
 export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, injected: Partial<PluginLifecycleHarnessDependencies> = {}): Promise<PluginLifecycleHostReport> {
-  const d = { ...defaults, ...injected }; requireAbsolutePaths(input); const target = platform();
+  const d = { ...defaults, ...injected }; if (input.host !== "claude-code" && input.host !== "codex") throw new Error("unsupported lifecycle host"); requireAbsolutePaths(input); const target = platform();
   if ((input.host === "claude-code" ? input.environment.ANTHROPIC_API_KEY : input.environment.OPENAI_API_KEY) === undefined) throw new Error("matching API key is required");
   await d.prepareEvidenceDirectory(input.evidenceDirectory);
   const index = await d.readFixtureIndex(join(input.fixtureOutputRoot, "fixture-index.json"));
@@ -68,6 +68,11 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
   const commands: string[] = []; const errors: string[] = []; const pids = new Set<number>();
   const report = emptyReport(input.host, target, index, commands, errors);
   const adapter = d.createAdapter(input.host, input.cliLaunch); let ownsMarketplace = false; let ownsPlugin = false;
+  const captureFailure = (error: unknown, fallback = "lifecycle operation failed"): void => {
+    const observation = typeof error === "object" && error !== null && "observation" in error ? (error as { observation?: CommandObservation }).observation : undefined;
+    if (observation !== undefined && observation.command.length > 0) commands.push(observation.command);
+    errors.push(observation === undefined ? fallback : `host command failed: ${observation.command} (${observation.exitCode})`);
+  };
   const prompt = async (runId: string, version: Version, text: string, allowFailure = false): Promise<{ command: CommandObservation; events: LifecycleEvent[] }> => {
     const evidencePath = join(input.evidenceDirectory, `${runId}.jsonl`);
     const environment = { ...input.environment, NAVACT_SPIKE_EVIDENCE_PATH: evidencePath, NAVACT_SPIKE_HOST: input.host, NAVACT_SPIKE_RUN_ID: runId, NAVACT_SPIKE_PLUGIN_VERSION: version };
@@ -78,39 +83,39 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
     const version = await adapter.version(input.projectDirectory); commands.push(version.command); report.hostVersion = hostVersion(version);
     const active = await d.activateFixture({ outputRoot: input.fixtureOutputRoot, host: input.host, version: "0.0.1" }); const add = await adapter.addMarketplace(active, input.projectDirectory); commands.push(add.command); ownsMarketplace = true;
     const install = await adapter.install(input.projectDirectory); commands.push(install.command); ownsPlugin = true;
-    const initialId = `initial-${input.host}`; const initial = await prompt(initialId, "0.0.1", healthPrompt(initialId)); const first = await verifyPhase({ d, host: input.host, target, events: initial.events, nonce: initialId, expectedVersion: "0.0.1", command: initial.command, priorPids: new Set() });
-    if (first.digest !== index.runtimeArtifacts["0.0.1"].sha256) eventError(); for (const event of initial.events) pids.add(event.pid);
+    const initialId = `initial-${input.host}`; const initial = await prompt(initialId, "0.0.1", healthPrompt(initialId)); for (const event of initial.events) pids.add(event.pid); const first = await verifyPhase({ d, host: input.host, target, events: initial.events, nonce: initialId, expectedVersion: "0.0.1", command: initial.command, priorPids: new Set() });
+    if (first.digest !== index.runtimeArtifacts["0.0.1"].sha256) eventError();
     report.initial = { healthPassed: true, cleanStopPassed: first.clean, launchedFromHostCache: true, pid: first.started.pid, startupLatencyMs: first.started.observedAtMs - initial.command.startedAtMs, healthLatencyMs: first.health.observedAtMs - first.started.observedAtMs, observedRuntimeBuildId: first.started.runtimeBuildId, observedRuntimeSha256: first.digest };
     await d.activateFixture({ outputRoot: input.fixtureOutputRoot, host: input.host, version: "0.0.2" });
-    try { for (const update of await adapter.update(input.projectDirectory)) { commands.push(update.command); if (update.exitCode !== 0) errors.push(`host command failed: ${update.command} (${update.exitCode})`); } } catch (error) { errors.push(commandFailure(error)); }
-    const updateId = `updated-${input.host}`; const updated = await prompt(updateId, "0.0.2", healthPrompt(updateId)); const second = await verifyPhase({ d, host: input.host, target, events: updated.events, nonce: updateId, expectedVersion: "0.0.2", command: updated.command, priorPids: pids, priorPath: first.started.executablePath });
-    if (second.digest !== index.runtimeArtifacts["0.0.2"].sha256) eventError(); for (const event of updated.events) pids.add(event.pid);
+    try { for (const update of await adapter.update(input.projectDirectory)) { commands.push(update.command); if (update.exitCode !== 0) errors.push(`host command failed: ${update.command} (${update.exitCode})`); } } catch (error) { captureFailure(error); }
+    const updateId = `updated-${input.host}`; const priorUpdatePids = new Set(pids); const updated = await prompt(updateId, "0.0.2", healthPrompt(updateId)); for (const event of updated.events) pids.add(event.pid); const second = await verifyPhase({ d, host: input.host, target, events: updated.events, nonce: updateId, expectedVersion: "0.0.2", command: updated.command, priorPids: priorUpdatePids, priorPath: first.started.executablePath });
+    if (second.digest !== index.runtimeArtifacts["0.0.2"].sha256) eventError();
     report.update = { healthPassed: true, cleanStopPassed: second.clean, launchedFromHostCache: true, pid: second.started.pid, observedPluginVersion: second.health.pluginVersion, observedRuntimeBuildId: second.started.runtimeBuildId, observedRuntimeSha256: second.digest };
     const crashId = `crash-${input.host}`;
     try {
-      const crash = await prompt(crashId, "0.0.2", crashPrompt(`recovery-${input.host}`), true);
-      for (const event of crash.events) pids.add(event.pid); validateJournal(crash.events, input.host, target, "0.0.2");
+      const priorCrashPids = new Set(pids); const crash = await prompt(crashId, "0.0.2", crashPrompt(`recovery-${input.host}`), true);
+      for (const event of crash.events) pids.add(event.pid); validateJournal(crash.events, input.host, target, crashId, "0.0.2");
       const requested = requireEvent(crash.events, "crash-requested"); const starts = crash.events.filter((event) => event.event === "started");
       if (starts.length === 0 || starts[0]!.pid === second.started.pid || requested.pid !== starts[0]!.pid) eventError();
       const restarted = starts[1]; const recovery = crash.events.find((event) => event.event === "health" && event.nonce === `recovery-${input.host}`);
       if ((restarted === undefined) !== (recovery === undefined)) eventError();
-      if (restarted !== undefined && recovery !== undefined && (requested.observedAtMs >= restarted.observedAtMs || !sameRuntime(restarted, recovery) || pids.has(restarted.pid) || (await d.sha256File(restarted.executablePath)) !== index.runtimeArtifacts["0.0.2"].sha256)) eventError();
+      if (restarted !== undefined && recovery !== undefined && (requested.observedAtMs >= restarted.observedAtMs || !sameRuntime(restarted, recovery) || priorCrashPids.has(restarted.pid) || (await d.sha256File(restarted.executablePath)) !== index.runtimeArtifacts["0.0.2"].sha256)) eventError();
       report.crashRecovery.crashObserved = true; report.crashRecovery.sameSessionRestartObserved = restarted !== undefined;
-    } catch (error) { errors.push(error instanceof Error && error.message === "invalid lifecycle journal" ? error.message : commandFailure(error)); }
-  } catch (error) { errors.push(error instanceof Error && error.message === "invalid lifecycle journal" ? error.message : commandFailure(error)); }
+    } catch (error) { error instanceof Error && error.message === "invalid lifecycle journal" ? errors.push(error.message) : captureFailure(error); }
+  } catch (error) { error instanceof Error && error.message === "invalid lifecycle journal" ? errors.push(error.message) : captureFailure(error); }
   // Fresh recovery is intentionally independent of same-session crash behavior.
   if (ownsPlugin) {
     try {
-      const freshId = `fresh-${input.host}`; const fresh = await prompt(freshId, "0.0.2", healthPrompt(freshId)); const phase = await verifyPhase({ d, host: input.host, target, events: fresh.events, nonce: freshId, expectedVersion: "0.0.2", command: fresh.command, priorPids: pids });
-      if (phase.digest !== index.runtimeArtifacts["0.0.2"].sha256) eventError(); for (const event of fresh.events) pids.add(event.pid);
+      const freshId = `fresh-${input.host}`; const priorFreshPids = new Set(pids); const fresh = await prompt(freshId, "0.0.2", healthPrompt(freshId)); for (const event of fresh.events) pids.add(event.pid); const phase = await verifyPhase({ d, host: input.host, target, events: fresh.events, nonce: freshId, expectedVersion: "0.0.2", command: fresh.command, priorPids: priorFreshPids });
+      if (phase.digest !== index.runtimeArtifacts["0.0.2"].sha256) eventError();
       report.crashRecovery = { ...report.crashRecovery, freshSessionRecoveryPassed: true, reinstallRequired: false, launchedFromHostCache: true, recoveredPid: phase.started.pid, observedRuntimeBuildId: phase.started.runtimeBuildId, observedRuntimeSha256: phase.digest };
       if (!phase.clean) errors.push("fresh Runtime did not exit cleanly");
-    } catch (error) { errors.push(error instanceof Error && error.message === "invalid lifecycle journal" ? error.message : commandFailure(error)); }
+    } catch (error) { error instanceof Error && error.message === "invalid lifecycle journal" ? errors.push(error.message) : captureFailure(error); }
   }
-  if (ownsPlugin) { try { const command = await adapter.uninstall(input.projectDirectory); commands.push(command.command); report.removal.pluginRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed: ${command.command} (${command.exitCode})`); } catch (error) { errors.push(commandFailure(error)); } }
-  if (ownsMarketplace) { try { const command = await adapter.removeMarketplace(input.projectDirectory); commands.push(command.command); report.removal.marketplaceRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed: ${command.command} (${command.exitCode})`); } catch (error) { errors.push(commandFailure(error)); } }
+  if (ownsPlugin) { try { const command = await adapter.uninstall(input.projectDirectory); commands.push(command.command); report.removal.pluginRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed: ${command.command} (${command.exitCode})`); } catch (error) { captureFailure(error, "plugin cleanup failed"); } }
+  if (ownsMarketplace) { try { const command = await adapter.removeMarketplace(input.projectDirectory); commands.push(command.command); report.removal.marketplaceRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed: ${command.command} (${command.exitCode})`); } catch (error) { captureFailure(error, "marketplace cleanup failed"); } }
   report.removal.noLiveRuntime = (await Promise.all([...pids].map((pid) => d.waitForProcessExit(pid, 10_000)))).every(Boolean);
-  try { report.removal.hostManagedResiduePaths = await d.findHostManagedResidue(input.host); report.removal.navactOwnedResiduePaths = report.removal.hostManagedResiduePaths.filter((path) => !inside(path, join(homedir(), input.host === "claude-code" ? ".claude" : ".codex", "plugins"))); } catch { errors.push("host residue inspection failed"); }
+  try { report.removal.hostManagedResiduePaths = await d.findHostManagedResidue(input.host); report.removal.navactOwnedResiduePaths = await findNavactOwnedResidue(); } catch { errors.push("host residue inspection failed"); }
   return parsePluginLifecycleHostReport(report);
 }
 
@@ -120,5 +125,7 @@ function emptyReport(host: LifecycleHost, target: "darwin-arm64" | "win32-x64", 
 }
 export async function readRunEvents(path: string, runId: string): Promise<LifecycleEvent[]> { return (await readFile(path, "utf8")).split("\n").filter(Boolean).map(parseLifecycleEventLine).filter((event) => event.runId === runId); }
 export async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> { const end = Date.now() + timeoutMs; do { try { process.kill(pid, 0); } catch (error: unknown) { const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined; if (code === "ESRCH") return true; } await new Promise((done) => setTimeout(done, 25)); } while (Date.now() < end); return false; }
-export async function findHostManagedResidue(host: LifecycleHost): Promise<string[]> { const root = join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins"); const result: string[] = []; const visit = async (directory: string): Promise<void> => { for (const entry of await readdir(directory, { withFileTypes: true })) { const path = join(directory, entry.name); if (entry.name.includes("navact-lifecycle-spike")) result.push(path); if (entry.isDirectory()) await visit(path); } }; for (const part of ["cache", "data"]) await visit(join(root, part)); return result; }
+export async function findNamedResidue(roots: string[]): Promise<string[]> { const result: string[] = []; const visit = async (directory: string): Promise<void> => { let entries; try { entries = await readdir(directory, { withFileTypes: true }); } catch (error: unknown) { const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined; if (code === "ENOENT") return; throw error; } for (const entry of entries) { const path = join(directory, entry.name); if (entry.name.includes("navact-lifecycle-spike")) result.push(path); if (entry.isDirectory()) await visit(path); } }; for (const root of roots) await visit(root); return result; }
+export async function findHostManagedResidue(host: LifecycleHost): Promise<string[]> { return findNamedResidue([join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "cache"), join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "data")]); }
+export async function findNavactOwnedResidue(): Promise<string[]> { return findNamedResidue([join(homedir(), ".navact"), join(homedir(), "Library", "Application Support", "Navact")]); }
 export async function sha256File(path: string): Promise<string> { return createHash("sha256").update(await readFile(path)).digest("hex"); }

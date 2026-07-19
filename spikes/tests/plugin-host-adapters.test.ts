@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -69,4 +69,22 @@ it("resolves package bin strings and keyed bins inside its package root", async 
   await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("missing package bin");
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ bin: "../../escape.js" }));
   await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("escapes package root");
+});
+
+it("keeps JS launch prefix arguments internal and passes allowFailure to the runner", async () => {
+  const inputs: Parameters<RunCommand>[0][] = [];
+  const adapter = createPluginHostAdapter("codex", { displayName: "codex", executable: process.execPath, prefixArgs: ["/absolute/codex.mjs"] }, async (input) => { inputs.push(input); return { command: "codex exec", exitCode: 9, stdout: "private", stderr: "private", startedAtMs: 1, durationMs: 1 }; });
+  await adapter.runPrompt("prompt", "/project", { PARENT: "value" }, true);
+  expect(inputs[0]).toMatchObject({ executable: process.execPath, prefixArgs: ["/absolute/codex.mjs"], allowFailure: true });
+  expect(inputs[0]?.args.slice(0, 2)).toEqual(["exec", "--ephemeral"]);
+});
+
+it("rejects a bin symlink escaping the real package root and a directory target", async () => {
+  const prefix = await mkdtemp(join(tmpdir(), "navact-bin-")); directories.push(prefix);
+  const root = join(prefix, "node_modules", "@openai", "codex"); await mkdir(join(root, "bin"), { recursive: true });
+  const outside = join(prefix, "outside.js"); await writeFile(outside, "x");
+  await symlink(outside, join(root, "bin", "codex.js")); await writeFile(join(root, "package.json"), JSON.stringify({ bin: "bin/codex.js" }));
+  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("escapes package root");
+  await writeFile(join(root, "package.json"), JSON.stringify({ bin: "bin" }));
+  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("not a regular file");
 });
