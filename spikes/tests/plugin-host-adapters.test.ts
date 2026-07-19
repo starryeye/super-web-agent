@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
@@ -62,9 +62,9 @@ it("resolves package bin strings and keyed bins inside its package root", async 
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ bin: { codex: "bin/codex.js" } }));
   await writeFile(join(packageRoot, "bin", "codex.js"), "#!/usr/bin/env node\n");
   await chmod(join(packageRoot, "bin", "codex.js"), 0o500);
-  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).resolves.toBe(join(packageRoot, "bin", "codex.js"));
+  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).resolves.toBe(await realpath(join(packageRoot, "bin", "codex.js")));
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ bin: "bin/codex.js" }));
-  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).resolves.toBe(join(packageRoot, "bin", "codex.js"));
+  await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).resolves.toBe(await realpath(join(packageRoot, "bin", "codex.js")));
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ bin: { nope: "bin/codex.js" } }));
   await expect(resolveNpmPackageBin({ prefix, packageName: "@openai/codex", binName: "codex" })).rejects.toThrow("missing package bin");
   await writeFile(join(packageRoot, "package.json"), JSON.stringify({ bin: "../../escape.js" }));

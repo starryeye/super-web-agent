@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import { runPluginLifecycle } from "../src/plugin-lifecycle-harness.js";
 import type { LifecycleEvent, LifecycleHost } from "../src/lifecycle-events.js";
+import type { PluginLifecycleHarnessDependencies } from "../src/plugin-lifecycle-harness.js";
 import type { PluginHostAdapter } from "../src/plugin-host-adapters.js";
 
 const digest1 = "a".repeat(64);
@@ -27,7 +28,7 @@ it("orchestrates v1, v2, crash and fresh recovery without sensitive command outp
     "crash-claude-code": [event(host, "crash-claude-code", "started", "0.0.2", 103), event(host, "crash-claude-code", "crash-requested", "0.0.2", 103)],
     "fresh-claude-code": [event(host, "fresh-claude-code", "started", "0.0.2", 104), event(host, "fresh-claude-code", "health", "0.0.2", 104, "fresh-claude-code")],
   };
-  const report = await runPluginLifecycle({ host, cliLaunch: { displayName: "claude", executable: "claude", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: { ANTHROPIC_API_KEY: "present" } }, {
+  const report = await runPluginLifecycle({ host, cliLaunch: { displayName: "claude", executable: "/host/claude", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: { ANTHROPIC_API_KEY: "present" } }, {
     createAdapter: () => adapter,
     activateFixture: async ({ version }) => { calls.push(`activate-${version}`); return "/active"; },
     readFixtureIndex: async () => ({ schemaVersion: 1, platform: "darwin-arm64", versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }),
@@ -47,15 +48,40 @@ it("cleans up marketplace ownership in reverse order after a prompt failure", as
   const adapter: PluginHostAdapter = {
     host: "claude-code", marketplaceName: "market", selector: "selector",
     version: async () => observation("version"), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); },
-    update: async () => [], runPrompt: async () => { calls.push("prompt"); throw Object.assign(new Error("no output retained"), { observation: { exitCode: 23 } }); },
+    update: async () => [], runPrompt: async () => { calls.push("prompt"); throw Object.assign(new Error("no output retained"), { observation: { ...observation("prompt"), exitCode: 23 } }); },
     uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); },
   };
-  const report = await runPluginLifecycle({ host: "claude-code", cliLaunch: { displayName: "claude", executable: "claude", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: { ANTHROPIC_API_KEY: "present" } }, {
+  const report = await runPluginLifecycle({ host: "claude-code", cliLaunch: { displayName: "claude", executable: "/host/claude", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: { ANTHROPIC_API_KEY: "present" } }, {
     createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: "darwin-arm64", versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }),
     readEvents: async () => [], sha256File: async () => digest1, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {},
   });
-  expect(calls).toEqual(["add", "install", "prompt", "uninstall", "remove"]);
-  expect(report.errors).toEqual(["host command failed (23)"]);
+  expect(calls).toEqual(["add", "install", "prompt", "prompt", "uninstall", "remove"]);
+  expect(report.errors).toEqual(["host command failed: prompt (23)", "host command failed: prompt (23)"]);
 });
+
+it("runs fresh recovery after an invalid same-session journal and records every observed PID", async () => {
+  const calls: string[] = [];
+  const waits: number[] = [];
+  const host: LifecycleHost = "claude-code";
+  const adapter = fakeAdapter(host, calls);
+  const runs: Record<string, LifecycleEvent[]> = {
+    "initial-claude-code": [event(host, "initial-claude-code", "started", "0.0.1", 101), event(host, "initial-claude-code", "health", "0.0.1", 101, "initial-claude-code")],
+    "updated-claude-code": [event(host, "updated-claude-code", "started", "0.0.2", 102), event(host, "updated-claude-code", "health", "0.0.2", 102, "updated-claude-code")],
+    "crash-claude-code": [event("codex", "crash-claude-code", "started", "0.0.2", 103), event(host, "crash-claude-code", "crash-requested", "0.0.2", 103)],
+    "fresh-claude-code": [event(host, "fresh-claude-code", "started", "0.0.2", 104), event(host, "fresh-claude-code", "health", "0.0.2", 104, "fresh-claude-code")],
+  };
+  const report = await runHarness(host, adapter, runs, { waitForProcessExit: async (pid: number) => { waits.push(pid); return true; } });
+  expect(calls).toContain("fresh");
+  expect(report.errors).toContain("invalid lifecycle journal");
+  expect(waits).toContain(103);
+  expect(report.crashRecovery.freshSessionRecoveryPassed).toBe(true);
+});
+
+function fakeAdapter(host: LifecycleHost, calls: string[]): PluginHostAdapter {
+  return { host, marketplaceName: "market", selector: "selector", version: async () => observation("version"), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); }, update: async () => { calls.push("update"); return [observation("update")]; }, runPrompt: async (prompt) => { const phase = prompt.includes("initial-") ? "initial" : prompt.includes("updated-") ? "updated" : prompt.includes("fresh-") ? "fresh" : "crash"; calls.push(phase); return observation(phase); }, uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); } };
+}
+async function runHarness(host: LifecycleHost, adapter: PluginHostAdapter, runs: Record<string, LifecycleEvent[]>, extra: Partial<PluginLifecycleHarnessDependencies> = {}) {
+  return runPluginLifecycle({ host, cliLaunch: { displayName: host === "claude-code" ? "claude" : "codex", executable: "/host/cli", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: host === "claude-code" ? { ANTHROPIC_API_KEY: "present" } : { OPENAI_API_KEY: "present" } }, { createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: "darwin-arm64", versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }), readEvents: async (_path: string, runId: string) => runs[runId] ?? [], sha256File: async (path: string) => path.includes("0.0.1") ? digest1 : digest2, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {}, ...extra });
+}
 
 function observation(command: string) { return { command, exitCode: 0, stdout: "secret", stderr: "secret", startedAtMs: 100, durationMs: 1 }; }

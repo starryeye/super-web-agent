@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import type { LifecycleHost } from "./lifecycle-events.js";
 
@@ -57,5 +57,8 @@ export async function resolveNpmPackageBin(input: { prefix: string; packageName:
   const target = resolve(root, bin); const relation = relative(root, target);
   if (relation === "" || relation.startsWith("..") || isAbsolute(relation)) throw new Error("package bin escapes package root");
   if (!(await stat(target)).isFile()) throw new Error("package bin is not a regular file");
-  return target;
+  const [realRoot, realTarget] = await Promise.all([realpath(root), realpath(target)]);
+  const realRelation = relative(realRoot, realTarget);
+  if (realRelation === "" || realRelation.startsWith("..") || isAbsolute(realRelation)) throw new Error("package bin escapes package root");
+  return realTarget;
 }
