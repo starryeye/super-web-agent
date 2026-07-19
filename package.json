@@ -10,6 +10,7 @@
     "spikes:test": "pnpm -C spikes test",
     "spikes:typecheck": "pnpm -C spikes typecheck",
     "spikes:verify": "pnpm -C spikes verify",
-    "spikes:build-plugin-lifecycle-fixtures": "pnpm -C spikes build:plugin-lifecycle-fixtures"
+    "spikes:build-plugin-lifecycle-fixtures": "pnpm -C spikes build:plugin-lifecycle-fixtures",
+    "spikes:run-plugin-lifecycle": "pnpm -C spikes run:plugin-lifecycle"
   }
 }
