@@ -186,6 +186,22 @@ it("rejects restarted crash evidence that reuses the crashing PID", async () => 
   expect(report.errors).toContain("invalid lifecycle journal");
 });
 
+it.each([
+  ["unexpected health nonce", (events: LifecycleEvent[]) => { events.push({ ...event("claude-code", "crash-claude-code", "health", "0.0.2", 103, "wrong"), observedAtMs: 200, sequence: 3 }); }],
+  ["extra recovery health", (events: LifecycleEvent[]) => { events.push({ ...event("claude-code", "crash-claude-code", "health", "0.0.2", 103, "recovery-claude-code"), observedAtMs: 200, sequence: 3 }); events.push({ ...event("claude-code", "crash-claude-code", "health", "0.0.2", 103, "recovery-claude-code"), observedAtMs: 250, sequence: 4 }); }],
+] as const)("rejects crash journal %s", async (_name, mutate) => {
+  const host: LifecycleHost = "claude-code"; const runs = validRuns(host); mutate(runs["crash-claude-code"]!);
+  const report = await runHarness(host, fakeAdapter(host, []), runs);
+  expect(report.errors).toContain("invalid lifecycle journal");
+});
+
+it("rejects a lexically-inside crash Runtime symlink escape", async () => {
+  const host: LifecycleHost = "claude-code"; const runs = validRuns(host);
+  const crash = runs["crash-claude-code"]!; crash[0] = { ...crash[0]!, executablePath: join(homedir(), ".claude", "plugins", "cache", "0.0.2", "linked-runtime") }; crash[1] = { ...crash[1]!, executablePath: crash[0]!.executablePath };
+  const report = await runHarness(host, fakeAdapter(host, []), runs, { resolveRealpath: async (path) => path.endsWith("linked-runtime") ? "/outside/runtime" : path });
+  expect(report.errors).toContain("invalid lifecycle journal");
+});
+
 it("records an existing explicit owned root even when no child name matches", async () => {
   const root = await mkdtemp(join(tmpdir(), "navact-owned-")); directories.push(root);
   await writeFile(join(root, "state.json"), "{}");

@@ -103,12 +103,15 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
       const priorCrashPids = new Set(pids); const crash = await prompt(crashId, "0.0.2", crashPrompt(`recovery-${input.host}`), true);
       for (const event of crash.events) pids.add(event.pid); validateJournal(crash.events, input.host, target, crashId, "0.0.2");
       const requested = requireEvent(crash.events, "crash-requested"); const starts = crash.events.filter((event) => event.event === "started");
-      const recoveries = crash.events.filter((event) => event.event === "health" && event.nonce === `recovery-${input.host}`);
+      const healthEvents = crash.events.filter((event) => event.event === "health");
+      const recoveries = healthEvents.filter((event) => event.nonce === `recovery-${input.host}`);
       if (starts.length < 1 || starts.length > 2 || starts[0]!.pid === second.started.pid || !sameRuntime(requested, starts[0]!)) eventError();
       const restarted = starts[1]; const recovery = recoveries[0];
       const startIndex = crash.events.indexOf(starts[0]!); const crashIndex = crash.events.indexOf(requested); const restartIndex = restarted === undefined ? -1 : crash.events.indexOf(restarted); const recoveryIndex = recovery === undefined ? -1 : crash.events.indexOf(recovery);
       if (startIndex >= crashIndex || (restartIndex !== -1 && (crashIndex >= restartIndex || recoveryIndex <= restartIndex))) eventError();
-      if (recoveries.length > 1) eventError();
+      if (healthEvents.length > 1 || (healthEvents.length === 1 && recoveries.length !== 1)) eventError();
+      const [realCrash, realCache] = await Promise.all([d.resolveRealpath(starts[0]!.executablePath), d.resolveRealpath(cacheRoot(input.host))]);
+      if (!inside(realCrash, realCache)) eventError();
       if ((restarted === undefined) !== (recovery === undefined)) eventError();
       if (restarted !== undefined && recovery !== undefined) {
         const [realRestarted, realCache] = await Promise.all([d.resolveRealpath(restarted.executablePath), d.resolveRealpath(cacheRoot(input.host))]);
