@@ -24,9 +24,11 @@ implementation is the Chrome Extension, which uses the user's existing Chrome
 profile and login sessions. Users do not provide OpenAI, Anthropic, or SWA API
 keys.
 
-The project adopts the new identity as a clean break. Current source,
-packages, protocols, documentation, repositories, and active branches use only
-the new identity. Existing Git commit history remains unchanged.
+The project adopts the new identity as a clean break. The target state after
+the migration is that current source, packages, protocols, documentation,
+repositories, and active branches use only the new identity. This is the
+post-migration target, not a claim about the current pre-migration repository
+state. Existing Git commit history remains unchanged.
 
 ## 2. Product Purpose
 
@@ -83,7 +85,8 @@ The rename uses one canonical form for each context:
 | Package scope | `@super-web-agent/*` |
 | Runtime executable | `super-web-agent-runtime` |
 | Public protocol namespace | `swa.*` |
-| MCP-compatible short identifiers | `swa_*` |
+| MCP tool, resource, and prompt identifiers | `swa_*` |
+| MCP `Implementation.name` values | descriptive `super-web-agent-*` slugs |
 | Environment variables | `SWA_*` |
 | Public TypeScript class | `SuperWebAgent` |
 | Short code variable | `swa` |
@@ -93,6 +96,12 @@ Human-facing prose uses `Super Web Agent` on first mention and `SWA`
 afterward. Machine-facing identifiers use the lowercase slug or acronym form
 defined above. No compatibility aliases for the former identity are added
 because no public release depends on them.
+
+The `swa_*` form is reserved for MCP tool, resource, and prompt identifiers.
+MCP implementation names remain descriptive slugs, including
+`super-web-agent-runtime-spike`,
+`super-web-agent-runtime-supervisor-spike`, and
+`super-web-agent-spike-test`.
 
 The `docs/superpowers/` and `.superpowers/` paths retain their names because
 they identify a development workflow rather than the product. Their existing
@@ -228,6 +237,14 @@ desktop application's approval cannot replace the Bridge's final approval for
 communication, financial, destructive, or other externally consequential
 actions.
 
+Each high-risk approval artifact is single-use and short-lived. It is bound to
+the Runtime Session, Document Epoch, exclusive page lease, origin, action type,
+and the canonical critical values displayed to the user. Runtime and Browser
+Bridge both revalidate that complete binding immediately before execution.
+Replay, changed critical values, expiration, disconnect, Runtime restart,
+Browser Bridge restart, lease loss, origin change, navigation, or Document
+Epoch change invalidates the approval and requires a new prompt.
+
 Each paired Runtime has a distinct identity. When Codex Desktop and Claude
 Desktop run simultaneously, the Bridge may connect to both, but it grants an
 exclusive, expiring execution lease per page. A Runtime must reacquire a lease
@@ -264,7 +281,8 @@ provider-neutral Runtime behavior.
 Retain and rename:
 
 - the self-contained Runtime artifact builder;
-- macOS and Windows packaging evidence;
+- macOS packaging evidence and cross-platform packaging structure, while
+  deferring Windows evidence to a Windows x64 run;
 - artifact integrity checks;
 - process start, stop, update, and crash-recovery logic;
 - MCP stdio health checks;
@@ -332,6 +350,10 @@ Then verify the v1 Chrome implementation's installation detection, pairing,
 permission denial and grant, structured observation, action execution,
 navigation, reconnect, and full resynchronization.
 
+Browser Bridge contract tests cover approval replay, mutation after the prompt,
+expiration, disconnect, Runtime restart, Browser Bridge restart, lease loss,
+origin change, navigation, and Document Epoch change.
+
 ### 11.4 Desktop Acceptance Tests
 
 With no model-provider API-key environment variables:
@@ -342,17 +364,19 @@ With no model-provider API-key environment variables:
 - confirm both hosts use the expected Runtime artifact; and
 - confirm uninstall leaves no live Runtime or SWA-owned residue.
 
-### 11.5 Rename Gate
+### 11.5 Rename Verification Checkpoints
 
-For `main` and every active feature branch:
-
-- scan tracked current files for all former display, slug, and uppercase
-  identifier variants;
-- require zero matches outside historical Git objects;
-- run all tests, type checks, builds, and workflow validation;
-- verify package names, executable paths, and generated artifacts;
-- verify the canonical GitHub remote URL; and
-- verify the main worktree and both linked worktrees.
+1. **Pre-merge PR gate:** On the current branch, verify source, tests, builds,
+   current-platform artifact names, zero tracked former-identity matches, and
+   the private-document ignore state.
+2. **Post-merge migration gate:** Verify that `main`, every active branch, the
+   GitHub repository and remote, the local root, and both linked worktrees use
+   the target identity.
+3. **Deferred keyless Windows gate:** The next keyless desktop-integration plan
+   must run Windows x64 Runtime packaging plus real `SWA_STAGE_*`
+   PowerShell/ACL behavior before any Windows support claim. This gate is not
+   part of the current rename pull request and must not use or dispatch the
+   superseded `.github/workflows/plugin-lifecycle-spike.yml` workflow.
 
 ## 12. Delivery Order
 
@@ -367,6 +391,8 @@ Work proceeds in this order:
    Chrome integration evidence; and
 6. begin the Page Model and action-execution production slices only after the
    desktop lifecycle gate passes.
+
+The repository rename remains first, and keyless evidence remains next.
 
 No implementation milestone may claim simplified installation, improved
 performance, or desktop compatibility without the corresponding verification

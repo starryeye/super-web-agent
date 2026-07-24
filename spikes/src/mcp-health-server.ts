@@ -10,7 +10,7 @@ export function buildHealthServer(): McpServer {
   server.registerTool(
     "swa_spike_health",
     {
-      description: "Return deterministic Runtime health.",
+      description: "Return disposable SWA Runtime artifact-spike health.",
       inputSchema: { nonce: z.string().min(1) },
       outputSchema: {
         status: z.literal("ok"),
