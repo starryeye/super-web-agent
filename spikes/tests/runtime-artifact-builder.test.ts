@@ -44,18 +44,19 @@ it.each(["0.0", "v0.0.1", "0.0.1-beta", "baseline", "packaging-baseline-1"])(
   },
 );
 
-it("embeds each requested build ID in a running self-contained Runtime", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-runtime-build-id-"));
-  directories.push(directory);
-  const entryPoint = join(directory, "entry.ts");
-  await writeFile(
-    entryPoint,
-    `import { RUNTIME_BUILD_ID } from ${JSON.stringify(resolve(process.cwd(), "src", "runtime-build-id.ts"))}; process.stdout.write(RUNTIME_BUILD_ID);`,
-  );
-  const originalPnpmEntry = process.env.npm_execpath;
-  process.env.npm_execpath = join(directory, "missing-pnpm.cjs");
-  try {
-    for (const runtimeBuildId of ["0.0.1", "0.0.2"] as const) {
+it.each(["0.0.1", "0.0.2"] as const)(
+  "embeds requested build ID %s in a running self-contained Runtime",
+  async (runtimeBuildId) => {
+    const directory = await mkdtemp(join(tmpdir(), "navact-runtime-build-id-"));
+    directories.push(directory);
+    const entryPoint = join(directory, "entry.ts");
+    await writeFile(
+      entryPoint,
+      `import { RUNTIME_BUILD_ID } from ${JSON.stringify(resolve(process.cwd(), "src", "runtime-build-id.ts"))}; process.stdout.write(RUNTIME_BUILD_ID);`,
+    );
+    const originalPnpmEntry = process.env.npm_execpath;
+    process.env.npm_execpath = join(directory, "missing-pnpm.cjs");
+    try {
       const outputPath = join(directory, runtimeBuildId, process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime");
       await buildSelfContainedRuntime({
         entryPoint,
@@ -68,9 +69,10 @@ it("embeds each requested build ID in a running self-contained Runtime", async (
       expect(result.error).toBeUndefined();
       expect(result.status).toBe(0);
       expect(result.stdout).toBe(runtimeBuildId);
+    } finally {
+      if (originalPnpmEntry === undefined) delete process.env.npm_execpath;
+      else process.env.npm_execpath = originalPnpmEntry;
     }
-  } finally {
-    if (originalPnpmEntry === undefined) delete process.env.npm_execpath;
-    else process.env.npm_execpath = originalPnpmEntry;
-  }
-}, 30_000);
+  },
+  30_000,
+);
