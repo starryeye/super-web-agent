@@ -20,7 +20,7 @@ function passingReport(platform: TargetPlatform): PackagingPlatformReport {
     variants: [
       {
         kind: "host-node",
-        artifact: "host-node/navact-runtime.cjs",
+        artifact: "host-node/super-web-agent-runtime.cjs",
         bytes: 1000,
         requiresHostNode: true,
         healthPassed: true,
@@ -30,7 +30,9 @@ function passingReport(platform: TargetPlatform): PackagingPlatformReport {
       },
       {
         kind: "self-contained",
-        artifact: windows ? "self-contained/navact-runtime.exe" : "self-contained/navact-runtime",
+        artifact: windows
+          ? "self-contained/super-web-agent-runtime.exe"
+          : "self-contained/super-web-agent-runtime",
         bytes: 90_000_000,
         requiresHostNode: false,
         healthPassed: true,
