@@ -1,5 +1,5 @@
 {
-  "name": "navact",
+  "name": "super-web-agent",
   "private": true,
   "packageManager": "pnpm@11.9.0",
   "engines": {

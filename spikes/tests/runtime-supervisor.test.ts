@@ -57,7 +57,9 @@ async function signedArtifact(artifactPath: string) {
 }
 
 async function healthArtifact(stubborn = false): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), stubborn ? "navact-stubborn-runtime-" : "navact-runtime-"));
+  const directory = await mkdtemp(
+    join(tmpdir(), stubborn ? "super-web-agent-stubborn-runtime-" : "super-web-agent-runtime-"),
+  );
   temporaryDirectories.push(directory);
   const artifactPath = join(directory, stubborn ? "stubborn-health.mjs" : "mcp-health-entry.mjs");
   const healthServerUrl = pathToFileURL(resolve("dist/src/mcp-health-server.js")).href;
@@ -94,7 +96,7 @@ function transportWithDeadlines(
 }
 
 async function delayedCleanExitArtifact(delayMs: number): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "navact-delayed-exit-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-delayed-exit-"));
   temporaryDirectories.push(directory);
   const entryPath = join(directory, "delayed-clean-exit.mjs");
   await writeFile(entryPath, `process.stdin.resume(); setTimeout(() => process.exit(0), ${String(delayMs)});\n`);
@@ -153,8 +155,14 @@ it("retries an unobserved close and reaps a later final close without accepting 
 it("releases staging after a synchronous pre-child spawn failure", async () => {
   const serverPath = await healthArtifact();
   const fixture = await signedArtifact(serverPath);
-  const baseline = new Set((await readdir(tmpdir())).filter(isRuntimeStagingDirectory));
-  const foreignDirectory = await mkdtemp(join(tmpdir(), "navact-runtime-build-id-"));
+  const isCanonicalRuntimeStagingDirectory = (name: string) =>
+    /^super-web-agent-runtime-(?:[A-Za-z0-9]{6}|[a-f0-9]{64})$/.test(name);
+  const baseline = new Set(
+    (await readdir(tmpdir())).filter(isCanonicalRuntimeStagingDirectory),
+  );
+  const foreignDirectory = await mkdtemp(
+    join(tmpdir(), "super-web-agent-runtime-build-id-"),
+  );
   temporaryDirectories.push(foreignDirectory);
   const supervisor = new RuntimeSupervisor({
     ...fixture,
@@ -173,7 +181,9 @@ it("releases staging after a synchronous pre-child spawn failure", async () => {
   } catch (error) {
     stopError = error;
   }
-  const afterStop = (await readdir(tmpdir())).filter(isRuntimeStagingDirectory);
+  const afterStop = (await readdir(tmpdir())).filter(
+    isCanonicalRuntimeStagingDirectory,
+  );
   const leaked = afterStop.filter((name) => !baseline.has(name));
   temporaryDirectories.push(...leaked.map((name) => join(tmpdir(), name)));
 
@@ -257,7 +267,7 @@ it("freezes premature exit before a later final close", async () => {
 });
 
 it("stages signed bytes independently from later source mutation", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-stage-source-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-stage-source-"));
   temporaryDirectories.push(directory);
   const sourcePath = join(directory, "mcp-health-entry.js");
   await copyFile(resolve("dist/src/mcp-health-entry.js"), sourcePath);
@@ -327,7 +337,7 @@ it("rejects stop after forced termination of a stubborn healthy Runtime", async 
 });
 
 it("refuses bytes changed after signing", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-supervisor-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-supervisor-"));
   temporaryDirectories.push(directory);
   const artifactPath = join(directory, "mcp-health-entry.js");
   await copyFile(resolve("dist/src/mcp-health-entry.js"), artifactPath);
@@ -344,7 +354,7 @@ it("refuses bytes changed after signing", async () => {
 });
 
 it("rejects a launch path different from the verified artifact", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-launch-binding-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-launch-binding-"));
   temporaryDirectories.push(directory);
   const artifactPath = join(directory, "verified-entry.js");
   const differentPath = join(directory, "different-entry.js");
@@ -365,7 +375,7 @@ it("derives the Host Node executable instead of honoring a caller override", asy
   const launch = {
     kind: "host-node",
     artifactPath: serverPath,
-    hostExecutable: join(tmpdir(), "navact-missing-host-executable"),
+    hostExecutable: join(tmpdir(), "super-web-agent-missing-host-executable"),
   } as unknown as RuntimeLaunchSpec;
   const supervisor = new RuntimeSupervisor({ ...fixture, launch });
   await expect(supervisor.start("nonce-4")).resolves.toMatchObject({ status: "ok", nonce: "nonce-4" });

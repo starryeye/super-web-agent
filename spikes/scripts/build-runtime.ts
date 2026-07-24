@@ -108,8 +108,15 @@ async function main(): Promise<void> {
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
 
-  const hostBundle = join(artifactRoot, "host-node", "navact-runtime.cjs");
-  const executableName = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  const hostBundle = join(
+    artifactRoot,
+    "host-node",
+    "super-web-agent-runtime.cjs",
+  );
+  const executableName =
+    process.platform === "win32"
+      ? "super-web-agent-runtime.exe"
+      : "super-web-agent-runtime";
   const seaExecutable = join(artifactRoot, "self-contained", executableName);
   let constructionError: unknown;
   try {
