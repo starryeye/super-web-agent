@@ -17,9 +17,9 @@ afterEach(async () => {
 });
 
 async function signedFixture() {
-  const directory = await mkdtemp(join(tmpdir(), "navact-manifest-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-manifest-"));
   temporaryDirectories.push(directory);
-  const artifactPath = join(directory, "navact-runtime");
+  const artifactPath = join(directory, "super-web-agent-runtime");
   await writeFile(artifactPath, "runtime-v1");
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const unsigned = {

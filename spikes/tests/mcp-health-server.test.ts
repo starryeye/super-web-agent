@@ -16,10 +16,24 @@ it("answers a real MCP tool call over stdio", async () => {
     args: [resolve("dist/src/mcp-health-entry.js")],
     stderr: "pipe",
   });
-  client = new Client({ name: "navact-spike-test", version: "0.0.0" });
+  client = new Client({
+    name: "super-web-agent-spike-test",
+    version: "0.0.0",
+  });
   await client.connect(transport);
+  expect(client.getServerVersion()).toMatchObject({
+    name: "super-web-agent-runtime-spike",
+    version: "0.0.0-spike",
+  });
+  const tools = await client.listTools();
+  expect(tools.tools).toContainEqual(
+    expect.objectContaining({
+      name: "swa_spike_health",
+      description: "Return disposable SWA Runtime artifact-spike health.",
+    }),
+  );
   const result = await client.callTool({
-    name: "navact_spike_health",
+    name: "swa_spike_health",
     arguments: { nonce: "n-1" },
   });
   expect(result.structuredContent).toMatchObject({

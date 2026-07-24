@@ -139,7 +139,11 @@ async function main(): Promise<void> {
   await rm(artifactRoot, { recursive: true, force: true });
   await mkdir(artifactRoot, { recursive: true });
 
-  const hostBundle = join(artifactRoot, "host-node", "navact-runtime.cjs");
+  const hostBundle = join(
+    artifactRoot,
+    "host-node",
+    "super-web-agent-runtime.cjs",
+  );
   await mkdir(dirname(hostBundle), { recursive: true });
   await build({
     entryPoints: [join(spikeRoot, "src", "mcp-health-entry.ts")],
@@ -164,7 +168,10 @@ async function main(): Promise<void> {
     },
   });
 
-  const executableName = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  const executableName =
+    process.platform === "win32"
+      ? "super-web-agent-runtime.exe"
+      : "super-web-agent-runtime";
   const seaExecutable = join(artifactRoot, "self-contained", executableName);
   let candidate: PackagingVariantReport;
   try {

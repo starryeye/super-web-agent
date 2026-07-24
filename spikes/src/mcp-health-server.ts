@@ -3,11 +3,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 export function buildHealthServer(): McpServer {
-  const server = new McpServer({ name: "navact-runtime-spike", version: "0.0.0-spike" });
+  const server = new McpServer({
+    name: "super-web-agent-runtime-spike",
+    version: "0.0.0-spike",
+  });
   server.registerTool(
-    "navact_spike_health",
+    "swa_spike_health",
     {
-      description: "Return disposable Runtime artifact-spike health.",
+      description: "Return disposable SWA Runtime artifact-spike health.",
       inputSchema: { nonce: z.string().min(1) },
       outputSchema: {
         status: z.literal("ok"),

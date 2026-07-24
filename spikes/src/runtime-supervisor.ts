@@ -150,8 +150,8 @@ export function parseWindowsAclSnapshot(output: string): unknown {
 
 const createPrivateWindowsDirectoryScript = String.raw`
 $ErrorActionPreference = 'Stop'
-$path = $env:NAVACT_STAGE_PATH
-$sid = [System.Security.Principal.SecurityIdentifier]::new($env:NAVACT_STAGE_SID)
+$path = $env:SWA_STAGE_PATH
+$sid = [System.Security.Principal.SecurityIdentifier]::new($env:SWA_STAGE_SID)
 if ([System.IO.Directory]::Exists($path) -or [System.IO.File]::Exists($path)) {
   throw 'Runtime staging path already exists'
 }
@@ -180,7 +180,7 @@ try {
 const inspectWindowsDirectoryAclScript = String.raw`
 $ErrorActionPreference = 'Stop'
 $sections = [System.Security.AccessControl.AccessControlSections]::Access -bor [System.Security.AccessControl.AccessControlSections]::Owner
-$acl = [System.Security.AccessControl.DirectorySecurity]::new($env:NAVACT_STAGE_PATH, $sections)
+$acl = [System.Security.AccessControl.DirectorySecurity]::new($env:SWA_STAGE_PATH, $sections)
 $protected = if ($acl.AreAccessRulesProtected) { '1' } else { '0' }
 [Console]::Out.WriteLine([string]::Join([char]9, [string[]]@('protected', $protected)))
 [Console]::Out.WriteLine([string]::Join([char]9, [string[]]@(
@@ -219,7 +219,7 @@ async function discoverWindowsSid(): Promise<string> {
 }
 
 async function createPosixStagingDirectory(): Promise<string> {
-  const stagingDirectory = await mkdtemp(join(tmpdir(), "navact-runtime-"));
+  const stagingDirectory = await mkdtemp(join(tmpdir(), "super-web-agent-runtime-"));
   try {
     await chmod(stagingDirectory, 0o700);
     if (((await stat(stagingDirectory)).mode & 0o777) !== 0o700) {
@@ -234,12 +234,12 @@ async function createPosixStagingDirectory(): Promise<string> {
 
 async function createWindowsStagingDirectory(): Promise<string> {
   const sid = await discoverWindowsSid();
-  const stagingDirectory = join(tmpdir(), `navact-runtime-${randomBytes(32).toString("hex")}`);
+  const stagingDirectory = join(tmpdir(), `super-web-agent-runtime-${randomBytes(32).toString("hex")}`);
   const icacls = system32Executable("icacls.exe");
   const powershellEnvironment = {
     ...process.env,
-    NAVACT_STAGE_PATH: stagingDirectory,
-    NAVACT_STAGE_SID: sid,
+    SWA_STAGE_PATH: stagingDirectory,
+    SWA_STAGE_SID: sid,
   };
   try {
     await runWindowsPowerShell(createPrivateWindowsDirectoryScript, powershellEnvironment);
@@ -364,9 +364,9 @@ export class RuntimeSupervisor {
         ...(this.options.launch.cwd === undefined ? {} : { cwd: this.options.launch.cwd }),
         ...(this.options.launch.env === undefined ? {} : { env: this.options.launch.env }),
       });
-      this.client = new Client({ name: "navact-runtime-supervisor-spike", version: "0.0.0" });
+      this.client = new Client({ name: "super-web-agent-runtime-supervisor-spike", version: "0.0.0" });
       await this.client.connect(this.transport);
-      const result = await this.client.callTool({ name: "navact_spike_health", arguments: { nonce } });
+      const result = await this.client.callTool({ name: "swa_spike_health", arguments: { nonce } });
       const value = validateHealthResult(result.structuredContent, nonce);
       this.state = "running";
       return value;
