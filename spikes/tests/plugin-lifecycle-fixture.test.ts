@@ -14,13 +14,13 @@ const versions = ["0.0.1", "0.0.2"] as const;
 const hosts = ["claude-code", "codex"] as const;
 const skill = `---
 name: lifecycle-probe
-description: Use only when explicitly asked to run the disposable Navact plugin lifecycle health or crash probe.
+description: Use only when explicitly asked to run the disposable Super Web Agent plugin lifecycle health or crash probe.
 ---
 
-Use only the \`navact_lifecycle\` MCP server.
+Use only the \`swa_lifecycle\` MCP server.
 
-- For a health probe, call \`navact_spike_health\` exactly once with the nonce supplied by the prompt.
-- For a crash/recovery probe, call \`navact_spike_crash\` exactly once. If the host reconnects the server in the same session, call \`navact_spike_health\` exactly once with the recovery nonce.
+- For a health probe, call \`swa_spike_health\` exactly once with the nonce supplied by the prompt.
+- For a crash/recovery probe, call \`swa_spike_crash\` exactly once. If the host reconnects the server in the same session, call \`swa_spike_health\` exactly once with the recovery nonce.
 - Do not run shell commands, edit files, or call any other tool.
 `;
 
@@ -29,9 +29,9 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "navact-plugin-fixture-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-plugin-fixture-"));
   directories.push(directory);
-  const executableName = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  const executableName = process.platform === "win32" ? "super-web-agent-runtime.exe" : "super-web-agent-runtime";
   const v1 = join(directory, "runtime-v1", executableName);
   const v2 = join(directory, "runtime-v2", executableName);
   await mkdir(join(directory, "runtime-v1"));
@@ -85,7 +85,7 @@ it("rejects invalid fixture build inputs before rendering", async () => {
   await mkdir(join(value.directory, "equal"));
   await writeFile(equalArtifact, "same-runtime");
   const otherPlatform = platform() === "darwin-arm64" ? "win32-x64" : "darwin-arm64";
-  const relativeOutputName = `navact-relative-output-${process.pid}-${directories.length}`;
+  const relativeOutputName = `super-web-agent-relative-output-${process.pid}-${directories.length}`;
   const relativeOutputPath = join(process.cwd(), relativeOutputName);
   directories.push(relativeOutputPath);
   await rm(relativeOutputPath, { recursive: true, force: true });
@@ -123,7 +123,7 @@ it("uses identical Runtime bytes across hosts but distinct bytes across versions
         version,
         host,
         "plugins",
-        "navact-lifecycle-spike",
+        "super-web-agent-lifecycle-spike",
         "bin",
         value.executableName,
       );
@@ -143,27 +143,27 @@ it("renders host-specific cache-safe MCP launch paths with an empty PATH", async
     platform: platform(),
   });
   const claude = JSON.parse(
-    await readFile(join(value.directory, "output", "versions", "0.0.1", "claude-code", "plugins", "navact-lifecycle-spike", ".mcp.json"), "utf8"),
+    await readFile(join(value.directory, "output", "versions", "0.0.1", "claude-code", "plugins", "super-web-agent-lifecycle-spike", ".mcp.json"), "utf8"),
   );
   const codex = JSON.parse(
-    await readFile(join(value.directory, "output", "versions", "0.0.1", "codex", "plugins", "navact-lifecycle-spike", ".mcp.json"), "utf8"),
+    await readFile(join(value.directory, "output", "versions", "0.0.1", "codex", "plugins", "super-web-agent-lifecycle-spike", ".mcp.json"), "utf8"),
   );
-  expect(claude.mcpServers.navact_lifecycle.command).toBe(
+  expect(claude.mcpServers.swa_lifecycle.command).toBe(
     `\${CLAUDE_PLUGIN_ROOT}/bin/${value.executableName}`,
   );
-  expect(claude.mcpServers.navact_lifecycle.env.PATH).toBe("");
-  expect(codex.mcpServers.navact_lifecycle).toMatchObject({
+  expect(claude.mcpServers.swa_lifecycle.env.PATH).toBe("");
+  expect(codex.mcpServers.swa_lifecycle).toMatchObject({
     command: `./bin/${value.executableName}`,
     cwd: ".",
-    env: { PATH: "", NAVACT_SPIKE_HOST: "codex" },
-    env_vars: ["NAVACT_SPIKE_EVIDENCE_PATH", "NAVACT_SPIKE_RUN_ID"],
+    env: { PATH: "", SWA_SPIKE_HOST: "codex" },
+    env_vars: ["SWA_SPIKE_EVIDENCE_PATH", "SWA_SPIKE_RUN_ID"],
   });
   const marketplace = JSON.parse(
     await readFile(join(value.directory, "output", "versions", "0.0.1", "codex", ".agents", "plugins", "marketplace.json"), "utf8"),
   );
   expect(marketplace).toMatchObject({
-    name: "navact-lifecycle-spike-codex",
-    plugins: [{ name: "navact-lifecycle-spike", source: "./plugins/navact-lifecycle-spike" }],
+    name: "super-web-agent-lifecycle-spike-codex",
+    plugins: [{ name: "super-web-agent-lifecycle-spike", source: "./plugins/super-web-agent-lifecycle-spike" }],
   });
 });
 
@@ -174,23 +174,23 @@ it("renders complete Claude and Codex fixtures for both versions", async () => {
   for (const version of versions) {
     const claudeRoot = join(outputRoot, "versions", version, "claude-code");
     const codexRoot = join(outputRoot, "versions", version, "codex");
-    const claudePlugin = join(claudeRoot, "plugins", "navact-lifecycle-spike");
-    const codexPlugin = join(codexRoot, "plugins", "navact-lifecycle-spike");
+    const claudePlugin = join(claudeRoot, "plugins", "super-web-agent-lifecycle-spike");
+    const codexPlugin = join(codexRoot, "plugins", "super-web-agent-lifecycle-spike");
     expect(JSON.parse(await readFile(join(claudePlugin, ".claude-plugin", "plugin.json"), "utf8"))).toEqual({
-      name: "navact-lifecycle-spike", version, description: "Disposable Navact Runtime lifecycle evidence.", author: { name: "Navact contributors" }, license: "Apache-2.0", skills: "./skills/", mcpServers: "./.mcp.json",
+      name: "super-web-agent-lifecycle-spike", version, description: "Disposable Super Web Agent Runtime lifecycle evidence.", author: { name: "Super Web Agent contributors" }, license: "Apache-2.0", skills: "./skills/", mcpServers: "./.mcp.json",
     });
     expect(JSON.parse(await readFile(join(claudePlugin, ".mcp.json"), "utf8"))).toEqual({
-      mcpServers: { navact_lifecycle: { type: "stdio", command: `\${CLAUDE_PLUGIN_ROOT}/bin/${value.executableName}`, args: [], env: { PATH: "", NAVACT_SPIKE_HOST: "claude-code", NAVACT_SPIKE_PLUGIN_VERSION: version, NAVACT_SPIKE_EVIDENCE_PATH: "${NAVACT_SPIKE_EVIDENCE_PATH}", NAVACT_SPIKE_RUN_ID: "${NAVACT_SPIKE_RUN_ID}" } } },
+      mcpServers: { swa_lifecycle: { type: "stdio", command: `\${CLAUDE_PLUGIN_ROOT}/bin/${value.executableName}`, args: [], env: { PATH: "", SWA_SPIKE_HOST: "claude-code", SWA_SPIKE_PLUGIN_VERSION: version, SWA_SPIKE_EVIDENCE_PATH: "${SWA_SPIKE_EVIDENCE_PATH}", SWA_SPIKE_RUN_ID: "${SWA_SPIKE_RUN_ID}" } } },
     });
-    expect(JSON.parse(await readFile(join(claudeRoot, ".claude-plugin", "marketplace.json"), "utf8"))).toEqual({ name: "navact-lifecycle-spike-claude", plugins: [{ name: "navact-lifecycle-spike", source: "./plugins/navact-lifecycle-spike" }] });
+    expect(JSON.parse(await readFile(join(claudeRoot, ".claude-plugin", "marketplace.json"), "utf8"))).toEqual({ name: "super-web-agent-lifecycle-spike-claude", plugins: [{ name: "super-web-agent-lifecycle-spike", source: "./plugins/super-web-agent-lifecycle-spike" }] });
     expect(JSON.parse(await readFile(join(codexPlugin, ".codex-plugin", "plugin.json"), "utf8"))).toEqual({
-      name: "navact-lifecycle-spike", version, description: "Disposable Navact Runtime lifecycle evidence.", author: { name: "Navact contributors" }, license: "Apache-2.0", skills: "./skills/", mcpServers: "./.mcp.json",
-      interface: { displayName: "Navact Lifecycle Spike", shortDescription: "Verify managed Runtime lifecycle", longDescription: "Disposable evidence for installing and managing the Navact Runtime.", developerName: "Navact contributors", category: "Productivity", capabilities: ["Local MCP"] },
+      name: "super-web-agent-lifecycle-spike", version, description: "Disposable Super Web Agent Runtime lifecycle evidence.", author: { name: "Super Web Agent contributors" }, license: "Apache-2.0", skills: "./skills/", mcpServers: "./.mcp.json",
+      interface: { displayName: "Super Web Agent Lifecycle Spike", shortDescription: "Verify managed Runtime lifecycle", longDescription: "Disposable evidence for installing and managing the Super Web Agent Runtime.", developerName: "Super Web Agent contributors", category: "Productivity", capabilities: ["Local MCP"] },
     });
     expect(JSON.parse(await readFile(join(codexPlugin, ".mcp.json"), "utf8"))).toEqual({
-      mcpServers: { navact_lifecycle: { command: `./bin/${value.executableName}`, args: [], cwd: ".", env: { PATH: "", NAVACT_SPIKE_HOST: "codex", NAVACT_SPIKE_PLUGIN_VERSION: version }, env_vars: ["NAVACT_SPIKE_EVIDENCE_PATH", "NAVACT_SPIKE_RUN_ID"], startup_timeout_sec: 20, tool_timeout_sec: 20 } },
+      mcpServers: { swa_lifecycle: { command: `./bin/${value.executableName}`, args: [], cwd: ".", env: { PATH: "", SWA_SPIKE_HOST: "codex", SWA_SPIKE_PLUGIN_VERSION: version }, env_vars: ["SWA_SPIKE_EVIDENCE_PATH", "SWA_SPIKE_RUN_ID"], startup_timeout_sec: 20, tool_timeout_sec: 20 } },
     });
-    expect(JSON.parse(await readFile(join(codexRoot, ".agents", "plugins", "marketplace.json"), "utf8"))).toEqual({ name: "navact-lifecycle-spike-codex", plugins: [{ name: "navact-lifecycle-spike", source: "./plugins/navact-lifecycle-spike" }] });
+    expect(JSON.parse(await readFile(join(codexRoot, ".agents", "plugins", "marketplace.json"), "utf8"))).toEqual({ name: "super-web-agent-lifecycle-spike-codex", plugins: [{ name: "super-web-agent-lifecycle-spike", source: "./plugins/super-web-agent-lifecycle-spike" }] });
     expect(await readFile(join(claudePlugin, "skills", "lifecycle-probe", "SKILL.md"), "utf8")).toBe(skill);
     expect(await readFile(join(codexPlugin, "skills", "lifecycle-probe", "SKILL.md"), "utf8")).toBe(skill);
   }
@@ -208,8 +208,8 @@ it("activates one complete version without linking to its source directory", asy
     host: "codex",
     version: "0.0.2",
   });
-  expect(JSON.parse(await readFile(join(active, "plugins", "navact-lifecycle-spike", ".codex-plugin", "plugin.json"), "utf8"))).toMatchObject({
-    name: "navact-lifecycle-spike",
+  expect(JSON.parse(await readFile(join(active, "plugins", "super-web-agent-lifecycle-spike", ".codex-plugin", "plugin.json"), "utf8"))).toMatchObject({
+    name: "super-web-agent-lifecycle-spike",
     version: "0.0.2",
     mcpServers: "./.mcp.json",
   });
@@ -220,8 +220,8 @@ it("activates an isolated copy rather than a source alias", async () => {
   const outputRoot = join(value.directory, "output");
   await buildPluginLifecycleFixtures({ artifacts: { "0.0.1": value.v1, "0.0.2": value.v2 }, outputRoot, platform: platform() });
   const active = await activatePluginFixtureVersion({ outputRoot, host: "codex", version: "0.0.2" });
-  const sourceManifest = join(outputRoot, "versions", "0.0.2", "codex", "plugins", "navact-lifecycle-spike", ".codex-plugin", "plugin.json");
-  const activeManifest = join(active, "plugins", "navact-lifecycle-spike", ".codex-plugin", "plugin.json");
+  const sourceManifest = join(outputRoot, "versions", "0.0.2", "codex", "plugins", "super-web-agent-lifecycle-spike", ".codex-plugin", "plugin.json");
+  const activeManifest = join(active, "plugins", "super-web-agent-lifecycle-spike", ".codex-plugin", "plugin.json");
   expect((await lstat(active)).isSymbolicLink()).toBe(false);
   const sourceBytes = await readFile(sourceManifest, "utf8");
   await writeFile(activeManifest, "{\"active\":true}\n");

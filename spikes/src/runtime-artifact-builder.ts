@@ -52,7 +52,7 @@ export async function buildSelfContainedRuntime(input: SelfContainedRuntimeBuild
     sourcemap: false,
     logLevel: "warning",
     define: {
-      __NAVACT_SPIKE_RUNTIME_BUILD_ID__: JSON.stringify(input.runtimeBuildId),
+      __SWA_SPIKE_RUNTIME_BUILD_ID__: JSON.stringify(input.runtimeBuildId),
     },
   });
 

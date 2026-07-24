@@ -26,14 +26,14 @@ export interface PluginHostAdapter {
   uninstall(cwd: string): Promise<CommandObservation>; removeMarketplace(cwd: string): Promise<CommandObservation>;
 }
 
-export function healthPrompt(nonce: string): string { return `Use only the Navact lifecycle plugin. Call navact_spike_health exactly once with nonce "${nonce}". Do not run shell commands, edit files, or call any other tool. Return only the tool's structured JSON.`; }
-export function crashPrompt(recoveryNonce: string): string { return `Use only the Navact lifecycle plugin. Call navact_spike_crash exactly once. If the MCP server reconnects in this same session, call navact_spike_health exactly once with nonce "${recoveryNonce}". Do not run shell commands, edit files, or call any other tool.`; }
+export function healthPrompt(nonce: string): string { return `Use only the Super Web Agent lifecycle plugin. Call swa_spike_health exactly once with nonce "${nonce}". Do not run shell commands, edit files, or call any other tool. Return only the tool's structured JSON.`; }
+export function crashPrompt(recoveryNonce: string): string { return `Use only the Super Web Agent lifecycle plugin. Call swa_spike_crash exactly once. If the MCP server reconnects in this same session, call swa_spike_health exactly once with nonce "${recoveryNonce}". Do not run shell commands, edit files, or call any other tool.`; }
 
 export function createPluginHostAdapter(host: LifecycleHost, cliLaunch: HostCliLaunch, runner: RunCommand = runCommand): PluginHostAdapter {
   const call = (args: string[], cwd: string, env?: NodeJS.ProcessEnv, allowFailure?: boolean) => runner({ executable: cliLaunch.executable, prefixArgs: cliLaunch.prefixArgs, args, displayName: cliLaunch.displayName, cwd, ...(env === undefined ? {} : { env }), ...(allowFailure === undefined ? {} : { allowFailure }) });
   const claude = host === "claude-code";
-  const marketplaceName = claude ? "navact-lifecycle-spike-claude" : "navact-lifecycle-spike-codex";
-  const selector = `navact-lifecycle-spike@${marketplaceName}`;
+  const marketplaceName = claude ? "super-web-agent-lifecycle-spike-claude" : "super-web-agent-lifecycle-spike-codex";
+  const selector = `super-web-agent-lifecycle-spike@${marketplaceName}`;
   return {
     host, marketplaceName, selector,
     version: (cwd) => call(["--version"], cwd),

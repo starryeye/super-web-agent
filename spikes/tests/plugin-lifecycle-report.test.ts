@@ -60,7 +60,7 @@ function passingReport(host: LifecycleHost, platform: TargetPlatform): PluginLif
       marketplaceRemoved: true,
       noLiveRuntime: true,
       hostManagedResiduePaths: [],
-      navactOwnedResiduePaths: [],
+      swaOwnedResiduePaths: [],
     },
     commands: [host === "claude-code" ? "claude --version" : "codex --version"],
     errors: [],
@@ -95,7 +95,7 @@ it.each([
   ["recovery wrong build", (report: PluginLifecycleHostReport) => { report.crashRecovery.observedRuntimeBuildId = "0.0.1"; }, "fresh-session recovery did not launch Runtime build 0.0.2 cleanly"],
   ["live Runtime", (report: PluginLifecycleHostReport) => { report.removal.noLiveRuntime = false; }, "plugin removal left a live Runtime"],
   ["failed plugin removal", (report: PluginLifecycleHostReport) => { report.removal.pluginRemoved = false; }, "plugin or marketplace removal failed"],
-  ["Navact residue", (report: PluginLifecycleHostReport) => { report.removal.navactOwnedResiduePaths.push("/tmp/navact"); }, "Navact-owned residue remained outside host-managed roots"],
+  ["Super Web Agent residue", (report: PluginLifecycleHostReport) => { report.removal.swaOwnedResiduePaths.push("/tmp/super-web-agent"); }, "SWA-owned residue remained outside host-managed roots"],
   ["recorded error", (report: PluginLifecycleHostReport) => { report.errors.push("host command failed"); }, "host command failed"],
 ] as const)("fails the gate for %s", (_name, mutate, reason) => {
   const report = parsedPassingReport();
@@ -122,7 +122,7 @@ it.each([
   ["empty command entry", (report: PluginLifecycleHostReport) => { report.commands = [""]; }],
   ["empty error entry", (report: PluginLifecycleHostReport) => { report.errors = [""]; report.initial.healthPassed = false; }],
   ["empty residue entry", (report: PluginLifecycleHostReport) => { report.removal.hostManagedResiduePaths = [""]; }],
-  ["empty Navact-owned residue entry", (report: PluginLifecycleHostReport) => { report.removal.navactOwnedResiduePaths = [""]; }],
+  ["empty SWA-owned residue entry", (report: PluginLifecycleHostReport) => { report.removal.swaOwnedResiduePaths = [""]; }],
   ["non-finite bytes", (report: PluginLifecycleHostReport) => { report.runtimeArtifacts["0.0.1"].bytes = JSON.parse("1e400") as number; }],
   ["non-finite latency", (report: PluginLifecycleHostReport) => { report.initial.startupLatencyMs = JSON.parse("1e400") as number; }],
   ["invalid PID", (report: PluginLifecycleHostReport) => { report.initial.pid = 0; }],
@@ -311,7 +311,7 @@ const orderedGateMutations: readonly [(report: PluginLifecycleHostReport) => voi
   [(report) => { report.crashRecovery.freshSessionRecoveryPassed = false; }, "fresh-session recovery did not launch Runtime build 0.0.2 cleanly"],
   [(report) => { report.removal.noLiveRuntime = false; }, "plugin removal left a live Runtime"],
   [(report) => { report.removal.marketplaceRemoved = false; }, "plugin or marketplace removal failed"],
-  [(report) => { report.removal.navactOwnedResiduePaths = ["/tmp/navact"]; }, "Navact-owned residue remained outside host-managed roots"],
+  [(report) => { report.removal.swaOwnedResiduePaths = ["/tmp/super-web-agent"]; }, "SWA-owned residue remained outside host-managed roots"],
   [(report) => { report.errors = ["first error", "second error"]; }, "first error"],
 ];
 

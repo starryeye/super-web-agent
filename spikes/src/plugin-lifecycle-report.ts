@@ -53,7 +53,7 @@ export interface PluginLifecycleHostReport {
     marketplaceRemoved: boolean;
     noLiveRuntime: boolean;
     hostManagedResiduePaths: string[];
-    navactOwnedResiduePaths: string[];
+    swaOwnedResiduePaths: string[];
   };
   commands: string[];
   errors: string[];
@@ -147,10 +147,10 @@ function validCrashRecovery(value: unknown): value is PluginLifecycleHostReport[
 
 function validRemoval(value: unknown): value is PluginLifecycleHostReport["removal"] {
   return exactKeys(value, [
-    "pluginRemoved", "marketplaceRemoved", "noLiveRuntime", "hostManagedResiduePaths", "navactOwnedResiduePaths",
+    "pluginRemoved", "marketplaceRemoved", "noLiveRuntime", "hostManagedResiduePaths", "swaOwnedResiduePaths",
   ]) &&
     isBoolean(value.pluginRemoved) && isBoolean(value.marketplaceRemoved) && isBoolean(value.noLiveRuntime) &&
-    isStringArray(value.hostManagedResiduePaths) && isStringArray(value.navactOwnedResiduePaths);
+    isStringArray(value.hostManagedResiduePaths) && isStringArray(value.swaOwnedResiduePaths);
 }
 
 export function parsePluginLifecycleHostReport(value: unknown): PluginLifecycleHostReport {
@@ -218,8 +218,8 @@ export function evaluatePluginLifecycleHostReport(report: PluginLifecycleHostRep
   if (!report.removal.pluginRemoved || !report.removal.marketplaceRemoved) {
     return { gate: "fail", reason: "plugin or marketplace removal failed" };
   }
-  if (report.removal.navactOwnedResiduePaths.length > 0) {
-    return { gate: "fail", reason: "Navact-owned residue remained outside host-managed roots" };
+  if (report.removal.swaOwnedResiduePaths.length > 0) {
+    return { gate: "fail", reason: "SWA-owned residue remained outside host-managed roots" };
   }
   if (report.errors.length > 0) return { gate: "fail", reason: report.errors[0]! };
   return { gate: "pass" };

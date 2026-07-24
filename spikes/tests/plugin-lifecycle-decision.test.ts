@@ -48,7 +48,7 @@ function passingReport(host: LifecycleHost, platform: TargetPlatform): PluginLif
     },
     removal: {
       pluginRemoved: true, marketplaceRemoved: true, noLiveRuntime: true,
-      hostManagedResiduePaths: [], navactOwnedResiduePaths: [],
+      hostManagedResiduePaths: [], swaOwnedResiduePaths: [],
     },
     commands: ["redacted host command"],
     errors: [],
@@ -129,7 +129,7 @@ it("rejects malformed evidence whose two Runtime builds share a digest", () => {
 it("renders non-gating restart and host residue observations as follow-ups", () => {
   const reports = allPassingReports();
   reports[3]!.crashRecovery.sameSessionRestartObserved = true;
-  reports[3]!.removal.hostManagedResiduePaths = ["host-cache/navact-lifecycle-spike"];
+  reports[3]!.removal.hostManagedResiduePaths = ["host-cache/super-web-agent-lifecycle-spike"];
   const markdown = renderPluginLifecycleDecision(reports);
   expect(markdown).toContain("Status: Accepted");
   expect(markdown).toContain("codex/win32-x64: host-managed cache residue recorded");
@@ -142,15 +142,15 @@ it("renders non-gating restart and host residue observations as follow-ups", () 
 it("never renders command output, errors, or absolute evidence paths", () => {
   const reports = allPassingReports();
   reports[0]!.commands = ["/private/tmp/secret-command-output"];
-  reports[0]!.removal.hostManagedResiduePaths = ["/private/tmp/navact-lifecycle-spike"];
+  reports[0]!.removal.hostManagedResiduePaths = ["/private/tmp/super-web-agent-lifecycle-spike"];
   const markdown = renderPluginLifecycleDecision(reports);
   expect(markdown).toContain("host-managed cache residue recorded");
   expect(markdown).not.toContain("secret-command-output");
-  expect(markdown).not.toContain("/private/tmp/navact-lifecycle-spike");
+  expect(markdown).not.toContain("/private/tmp/super-web-agent-lifecycle-spike");
 });
 
 it("writes a sanitized deterministic Rejected ADR for malformed existing writer input", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-decision-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-decision-"));
   const output = join(directory, "decision.md");
   const inputs = ["claude-mac.json", "claude-windows.json", "codex-mac.json", "codex-windows.json"].map((name) => join(directory, name));
   try {
@@ -186,7 +186,7 @@ it("renders failed update, recovery, and removal cells using complete phase pred
 });
 
 it("writes a calculated Rejected decision and exits 1 for a failed existing cell", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-decision-rejected-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-decision-rejected-"));
   const output = join(directory, "decision.md");
   const inputs = ["claude-mac.json", "claude-windows.json", "codex-mac.json", "codex-windows.json"].map((name) => join(directory, name));
   const reports = allPassingReports();

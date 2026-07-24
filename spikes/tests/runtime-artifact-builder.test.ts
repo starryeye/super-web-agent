@@ -12,12 +12,12 @@ afterEach(async () => {
 });
 
 async function absoluteFixture() {
-  const directory = await mkdtemp(join(tmpdir(), "navact-runtime-builder-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-runtime-builder-"));
   directories.push(directory);
   return {
     entryPoint: join(directory, "entry.ts"),
     hostBundlePath: join(directory, "host", "runtime.cjs"),
-    outputPath: join(directory, "output", "navact-runtime"),
+    outputPath: join(directory, "output", "super-web-agent-runtime"),
     workingDirectory: join(directory, "work"),
   };
 }
@@ -25,7 +25,7 @@ async function absoluteFixture() {
 it.each([
   ["entryPoint", "entry.ts"],
   ["hostBundlePath", "host/runtime.cjs"],
-  ["outputPath", "output/navact-runtime"],
+  ["outputPath", "output/super-web-agent-runtime"],
   ["workingDirectory", "work"],
 ] as const)("rejects a relative %s before launching a process", async (field, relativePath) => {
   const input = await absoluteFixture();
@@ -47,7 +47,7 @@ it.each(["0.0", "v0.0.1", "0.0.1-beta", "baseline", "packaging-baseline-1"])(
 it.each(["0.0.1", "0.0.2"] as const)(
   "embeds requested build ID %s in a running self-contained Runtime",
   async (runtimeBuildId) => {
-    const directory = await mkdtemp(join(tmpdir(), "navact-runtime-build-id-"));
+    const directory = await mkdtemp(join(tmpdir(), "super-web-agent-runtime-build-id-"));
     directories.push(directory);
     const entryPoint = join(directory, "entry.ts");
     await writeFile(
@@ -57,7 +57,7 @@ it.each(["0.0.1", "0.0.2"] as const)(
     const originalPnpmEntry = process.env.npm_execpath;
     process.env.npm_execpath = join(directory, "missing-pnpm.cjs");
     try {
-      const outputPath = join(directory, runtimeBuildId, process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime");
+      const outputPath = join(directory, runtimeBuildId, process.platform === "win32" ? "super-web-agent-runtime.exe" : "super-web-agent-runtime");
       await buildSelfContainedRuntime({
         entryPoint,
         hostBundlePath: join(directory, runtimeBuildId, "host", "runtime.cjs"),

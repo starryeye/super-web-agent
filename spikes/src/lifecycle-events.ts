@@ -68,10 +68,10 @@ export function parseLifecycleEventLine(line: string): LifecycleEvent {
 export function createLifecycleEventRecorder(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
 ): LifecycleEventRecorder | undefined {
-  const evidencePath = env.NAVACT_SPIKE_EVIDENCE_PATH;
-  const host = env.NAVACT_SPIKE_HOST;
-  const runId = env.NAVACT_SPIKE_RUN_ID;
-  const pluginVersion = env.NAVACT_SPIKE_PLUGIN_VERSION;
+  const evidencePath = env.SWA_SPIKE_EVIDENCE_PATH;
+  const host = env.SWA_SPIKE_HOST;
+  const runId = env.SWA_SPIKE_RUN_ID;
+  const pluginVersion = env.SWA_SPIKE_PLUGIN_VERSION;
   const values = [evidencePath, host, runId, pluginVersion];
   if (values.every((value) => value === undefined)) return undefined;
   if (values.some((value) => value === undefined)) {

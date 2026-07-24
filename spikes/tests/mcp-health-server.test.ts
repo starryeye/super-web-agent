@@ -48,23 +48,23 @@ it("answers a real MCP tool call over stdio", async () => {
 });
 
 it("records start, health, and exit without writing diagnostics to stdout", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-health-evidence-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-health-evidence-"));
   const evidencePath = join(directory, "events.jsonl");
   const transport = new RuntimeStdioTransport({
     command: process.execPath,
     args: [resolve("dist/src/mcp-health-entry.js")],
     stderr: "pipe",
     env: {
-      NAVACT_SPIKE_EVIDENCE_PATH: evidencePath,
-      NAVACT_SPIKE_HOST: "codex",
-      NAVACT_SPIKE_RUN_ID: "health-journal",
-      NAVACT_SPIKE_PLUGIN_VERSION: "0.0.1",
+      SWA_SPIKE_EVIDENCE_PATH: evidencePath,
+      SWA_SPIKE_HOST: "codex",
+      SWA_SPIKE_RUN_ID: "health-journal",
+      SWA_SPIKE_PLUGIN_VERSION: "0.0.1",
     },
   });
-  const evidenceClient = new Client({ name: "navact-lifecycle-test", version: "0.0.0" });
+  const evidenceClient = new Client({ name: "swa-lifecycle-test", version: "0.0.0" });
   try {
     await evidenceClient.connect(transport);
-    await evidenceClient.callTool({ name: "navact_spike_health", arguments: { nonce: "journal-1" } });
+    await evidenceClient.callTool({ name: "swa_spike_health", arguments: { nonce: "journal-1" } });
     await evidenceClient.close();
     const events = (await readFile(evidencePath, "utf8")).trim().split("\n").map(parseLifecycleEventLine);
     expect(events.map((event) => event.event)).toEqual(["started", "health", "exiting"]);
@@ -80,24 +80,24 @@ it("records start, health, and exit without writing diagnostics to stdout", asyn
 });
 
 it("records an induced crash and exits with the reserved code", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "navact-crash-evidence-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-crash-evidence-"));
   const evidencePath = join(directory, "events.jsonl");
   const transport = new RuntimeStdioTransport({
     command: process.execPath,
     args: [resolve("dist/src/mcp-health-entry.js")],
     stderr: "pipe",
     env: {
-      NAVACT_SPIKE_EVIDENCE_PATH: evidencePath,
-      NAVACT_SPIKE_HOST: "claude-code",
-      NAVACT_SPIKE_RUN_ID: "crash-journal",
-      NAVACT_SPIKE_PLUGIN_VERSION: "0.0.1",
+      SWA_SPIKE_EVIDENCE_PATH: evidencePath,
+      SWA_SPIKE_HOST: "claude-code",
+      SWA_SPIKE_RUN_ID: "crash-journal",
+      SWA_SPIKE_PLUGIN_VERSION: "0.0.1",
     },
   });
-  const crashClient = new Client({ name: "navact-lifecycle-test", version: "0.0.0" });
+  const crashClient = new Client({ name: "swa-lifecycle-test", version: "0.0.0" });
   try {
     await crashClient.connect(transport);
     await expect(
-      crashClient.callTool({ name: "navact_spike_crash", arguments: {} }),
+      crashClient.callTool({ name: "swa_spike_crash", arguments: {} }),
     ).resolves.toMatchObject({ structuredContent: { status: "crash-scheduled" } });
     const deadline = Date.now() + 2_000;
     while (!transport.exitObserved && Date.now() < deadline) {

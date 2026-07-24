@@ -29,7 +29,7 @@ import {
 const temporaryDirectories: string[] = [];
 
 function isRuntimeStagingDirectory(name: string): boolean {
-  return /^navact-runtime-(?:[A-Za-z0-9]{6}|[a-f0-9]{64})$/.test(name);
+  return /^super-web-agent-runtime-(?:[A-Za-z0-9]{6}|[a-f0-9]{64})$/.test(name);
 }
 
 afterEach(async () => {

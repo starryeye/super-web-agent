@@ -39,7 +39,7 @@ export function buildHealthServer(lifecycle?: HealthServerLifecycle): McpServer 
     },
   );
   server.registerTool(
-    "navact_spike_crash",
+    "swa_spike_crash",
     {
       description: "Terminate the disposable Runtime lifecycle spike after acknowledging the request.",
       inputSchema: {},

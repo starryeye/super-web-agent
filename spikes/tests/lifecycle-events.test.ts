@@ -14,16 +14,16 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "navact-lifecycle-events-"));
+  const directory = await mkdtemp(join(tmpdir(), "super-web-agent-lifecycle-events-"));
   directories.push(directory);
   return {
     directory,
     evidencePath: join(directory, "events.jsonl"),
     env: {
-      NAVACT_SPIKE_EVIDENCE_PATH: join(directory, "events.jsonl"),
-      NAVACT_SPIKE_HOST: "claude-code",
-      NAVACT_SPIKE_RUN_ID: "health-v1",
-      NAVACT_SPIKE_PLUGIN_VERSION: "0.0.1",
+      SWA_SPIKE_EVIDENCE_PATH: join(directory, "events.jsonl"),
+      SWA_SPIKE_HOST: "claude-code",
+      SWA_SPIKE_RUN_ID: "health-v1",
+      SWA_SPIKE_PLUGIN_VERSION: "0.0.1",
     },
   };
 }
@@ -48,14 +48,14 @@ it("appends strict ordered lifecycle events to a private file", async () => {
 it("returns undefined only when all lifecycle variables are absent", () => {
   expect(createLifecycleEventRecorder({})).toBeUndefined();
   expect(() =>
-    createLifecycleEventRecorder({ NAVACT_SPIKE_HOST: "codex" }),
+    createLifecycleEventRecorder({ SWA_SPIKE_HOST: "codex" }),
   ).toThrow("incomplete lifecycle evidence environment");
 });
 
 it("rejects relative evidence paths and malformed report values", async () => {
   const value = await fixture();
   expect(() =>
-    createLifecycleEventRecorder({ ...value.env, NAVACT_SPIKE_EVIDENCE_PATH: "events.jsonl" }),
+    createLifecycleEventRecorder({ ...value.env, SWA_SPIKE_EVIDENCE_PATH: "events.jsonl" }),
   ).toThrow("lifecycle evidence path must be absolute");
   expect(() => parseLifecycleEventLine('{"schemaVersion":1,"event":"health"}')).toThrow(
     "invalid lifecycle event",

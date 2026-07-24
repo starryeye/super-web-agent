@@ -18,14 +18,14 @@ async function main(): Promise<void> {
   const runtimesRoot = join(outputRoot, "runtimes");
   await rm(runtimesRoot, { recursive: true, force: true });
   await mkdir(runtimesRoot, { recursive: true });
-  const executable = process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  const executable = process.platform === "win32" ? "super-web-agent-runtime.exe" : "super-web-agent-runtime";
   const artifacts = {} as Record<"0.0.1" | "0.0.2", string>;
   for (const version of ["0.0.1", "0.0.2"] as const) {
     const versionRoot = join(runtimesRoot, version);
     const outputPath = join(versionRoot, executable);
     await buildSelfContainedRuntime({
       entryPoint: join(process.cwd(), "src", "mcp-health-entry.ts"),
-      hostBundlePath: join(versionRoot, "host-node", "navact-runtime.cjs"),
+      hostBundlePath: join(versionRoot, "host-node", "super-web-agent-runtime.cjs"),
       outputPath,
       workingDirectory: join(versionRoot, "sea-work"),
       runtimeBuildId: version,

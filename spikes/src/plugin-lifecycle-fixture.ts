@@ -14,16 +14,16 @@ export interface PluginLifecycleFixtureIndex {
 
 const hosts: readonly PluginHost[] = ["claude-code", "codex"];
 const versions: ["0.0.1", "0.0.2"] = ["0.0.1", "0.0.2"];
-const pluginName = "navact-lifecycle-spike";
+const pluginName = "super-web-agent-lifecycle-spike";
 const skill = `---
 name: lifecycle-probe
-description: Use only when explicitly asked to run the disposable Navact plugin lifecycle health or crash probe.
+description: Use only when explicitly asked to run the disposable Super Web Agent plugin lifecycle health or crash probe.
 ---
 
-Use only the \`navact_lifecycle\` MCP server.
+Use only the \`swa_lifecycle\` MCP server.
 
-- For a health probe, call \`navact_spike_health\` exactly once with the nonce supplied by the prompt.
-- For a crash/recovery probe, call \`navact_spike_crash\` exactly once. If the host reconnects the server in the same session, call \`navact_spike_health\` exactly once with the recovery nonce.
+- For a health probe, call \`swa_spike_health\` exactly once with the nonce supplied by the prompt.
+- For a crash/recovery probe, call \`swa_spike_crash\` exactly once. If the host reconnects the server in the same session, call \`swa_spike_health\` exactly once with the recovery nonce.
 - Do not run shell commands, edit files, or call any other tool.
 `;
 
@@ -46,7 +46,7 @@ function expectedPlatform(): "darwin-arm64" | "win32-x64" {
 }
 
 function expectedExecutableName(): string {
-  return process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime";
+  return process.platform === "win32" ? "super-web-agent-runtime.exe" : "super-web-agent-runtime";
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -71,8 +71,8 @@ function pluginManifest(host: PluginHost, version: PluginFixtureVersion): Record
   const base = {
     name: pluginName,
     version,
-    description: "Disposable Navact Runtime lifecycle evidence.",
-    author: { name: "Navact contributors" },
+    description: "Disposable Super Web Agent Runtime lifecycle evidence.",
+    author: { name: "Super Web Agent contributors" },
     license: "Apache-2.0",
     skills: "./skills/",
     mcpServers: "./.mcp.json",
@@ -81,10 +81,10 @@ function pluginManifest(host: PluginHost, version: PluginFixtureVersion): Record
   return {
     ...base,
     interface: {
-      displayName: "Navact Lifecycle Spike",
+      displayName: "Super Web Agent Lifecycle Spike",
       shortDescription: "Verify managed Runtime lifecycle",
-      longDescription: "Disposable evidence for installing and managing the Navact Runtime.",
-      developerName: "Navact contributors",
+      longDescription: "Disposable evidence for installing and managing the Super Web Agent Runtime.",
+      developerName: "Super Web Agent contributors",
       category: "Productivity",
       capabilities: ["Local MCP"],
     },
@@ -96,16 +96,16 @@ function mcpConfig(host: PluginHost, version: PluginFixtureVersion): Record<stri
   if (host === "claude-code") {
     return {
       mcpServers: {
-        navact_lifecycle: {
+        swa_lifecycle: {
           type: "stdio",
           command: `\${CLAUDE_PLUGIN_ROOT}/bin/${executable}`,
           args: [],
           env: {
             PATH: "",
-            NAVACT_SPIKE_HOST: "claude-code",
-            NAVACT_SPIKE_PLUGIN_VERSION: version,
-            NAVACT_SPIKE_EVIDENCE_PATH: "${NAVACT_SPIKE_EVIDENCE_PATH}",
-            NAVACT_SPIKE_RUN_ID: "${NAVACT_SPIKE_RUN_ID}",
+            SWA_SPIKE_HOST: "claude-code",
+            SWA_SPIKE_PLUGIN_VERSION: version,
+            SWA_SPIKE_EVIDENCE_PATH: "${SWA_SPIKE_EVIDENCE_PATH}",
+            SWA_SPIKE_RUN_ID: "${SWA_SPIKE_RUN_ID}",
           },
         },
       },
@@ -113,16 +113,16 @@ function mcpConfig(host: PluginHost, version: PluginFixtureVersion): Record<stri
   }
   return {
     mcpServers: {
-      navact_lifecycle: {
+      swa_lifecycle: {
         command: `./bin/${executable}`,
         args: [],
         cwd: ".",
         env: {
           PATH: "",
-          NAVACT_SPIKE_HOST: "codex",
-          NAVACT_SPIKE_PLUGIN_VERSION: version,
+          SWA_SPIKE_HOST: "codex",
+          SWA_SPIKE_PLUGIN_VERSION: version,
         },
-        env_vars: ["NAVACT_SPIKE_EVIDENCE_PATH", "NAVACT_SPIKE_RUN_ID"],
+        env_vars: ["SWA_SPIKE_EVIDENCE_PATH", "SWA_SPIKE_RUN_ID"],
         startup_timeout_sec: 20,
         tool_timeout_sec: 20,
       },
@@ -153,7 +153,7 @@ async function renderHost(input: {
     : join(hostRoot, ".agents", "plugins");
   await mkdir(marketplaceDirectory, { recursive: true });
   await writeJson(join(marketplaceDirectory, "marketplace.json"), {
-    name: input.host === "claude-code" ? "navact-lifecycle-spike-claude" : "navact-lifecycle-spike-codex",
+    name: input.host === "claude-code" ? "super-web-agent-lifecycle-spike-claude" : "super-web-agent-lifecycle-spike-codex",
     plugins: [{ name: pluginName, source: `./plugins/${pluginName}` }],
   });
   return executable;

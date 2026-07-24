@@ -14,7 +14,7 @@ const currentPlatform = `${process.platform}-${process.arch}` as "darwin-arm64" 
 const directories: string[] = [];
 afterEach(async () => { vi.restoreAllMocks(); await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 function event(host: LifecycleHost, runId: string, name: LifecycleEvent["event"], version: "0.0.1" | "0.0.2", pid: number, nonce?: string, sequence = name === "started" ? 1 : 2): LifecycleEvent {
-  return { schemaVersion: 1, runtimeVersion: "0.0.0-spike", runtimeBuildId: version, host, runId, pluginVersion: version, platform: currentPlatform, executablePath: join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "cache", version, "navact-runtime"), pid, parentPid: 1, sequence, observedAtMs: sequence > 2 ? 100 + sequence * 100 : name === "started" ? 110 : 150, event: name, ...(nonce === undefined ? {} : { nonce }) };
+  return { schemaVersion: 1, runtimeVersion: "0.0.0-spike", runtimeBuildId: version, host, runId, pluginVersion: version, platform: currentPlatform, executablePath: join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "cache", version, "super-web-agent-runtime"), pid, parentPid: 1, sequence, observedAtMs: sequence > 2 ? 100 + sequence * 100 : name === "started" ? 110 : 150, event: name, ...(nonce === undefined ? {} : { nonce }) };
 }
 
 it("orchestrates v1, v2, crash and fresh recovery without sensitive command outputs", async () => {
@@ -39,7 +39,7 @@ it("orchestrates v1, v2, crash and fresh recovery without sensitive command outp
     readFixtureIndex: async () => ({ schemaVersion: 1, platform: currentPlatform, versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }),
     readEvents: async (_path, runId) => runs[runId] ?? [], sha256File: async (path) => path.includes("0.0.1") ? digest1 : digest2,
     waitForProcessExit: async () => true, findHostManagedResidue: async () => [], now: () => 1,
-    prepareEvidenceDirectory: async () => {}, resolveRealpath: async (path) => path, findNavactOwnedResidue: async () => [],
+    prepareEvidenceDirectory: async () => {}, resolveRealpath: async (path) => path, findSwaOwnedResidue: async () => [],
   });
   expect(calls).toEqual(["activate-0.0.1", "add", "install", "initial", "activate-0.0.2", "update", "updated", "crash", "fresh", "uninstall", "remove"]);
   expect(report.initial).toMatchObject({ observedRuntimeBuildId: "0.0.1", observedRuntimeSha256: digest1, startupLatencyMs: 10, healthLatencyMs: 40 });
@@ -58,7 +58,7 @@ it("cleans up marketplace ownership in reverse order after a prompt failure", as
   };
   const report = await runPluginLifecycle({ host: "claude-code", cliLaunch: { displayName: "claude", executable: "/host/claude", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: { ANTHROPIC_API_KEY: "present" } }, {
     createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: currentPlatform, versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }),
-    readEvents: async () => [], sha256File: async () => digest1, resolveRealpath: async (path) => path, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], findNavactOwnedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {},
+    readEvents: async () => [], sha256File: async () => digest1, resolveRealpath: async (path) => path, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], findSwaOwnedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {},
   });
   expect(calls).toEqual(["add", "install", "prompt", "prompt", "uninstall", "remove"]);
   expect(report.errors).toEqual(["host command failed (23)", "host command failed (23)"]);
@@ -119,7 +119,7 @@ it.each([
 
 it("rejects a Runtime executable whose realpath escapes the host cache", async () => {
   const host: LifecycleHost = "claude-code";
-  const report = await runHarness(host, fakeAdapter(host, []), validRuns(host), { resolveRealpath: async (path) => path.endsWith("navact-runtime") ? "/outside/runtime" : path });
+  const report = await runHarness(host, fakeAdapter(host, []), validRuns(host), { resolveRealpath: async (path) => path.endsWith("super-web-agent-runtime") ? "/outside/runtime" : path });
   expect(report.errors).toContain("invalid lifecycle journal");
 });
 
@@ -157,15 +157,15 @@ it("polls EPERM with signal zero until ESRCH without sending a signal", async ()
   expect(kill.mock.calls).toEqual([[42, 0], [42, 0]]);
 });
 
-it("finds nested host and Navact residue under explicit roots", async () => {
-  const root = await mkdtemp(join(tmpdir(), "navact-residue-")); directories.push(root);
-  const nested = join(root, "cache", "version", "navact-lifecycle-spike", "state"); await mkdir(nested, { recursive: true }); await writeFile(join(nested, "proof"), "x");
-  await expect(findNamedResidue([join(root, "cache"), join(root, "missing")])).resolves.toEqual([join(root, "cache", "version", "navact-lifecycle-spike")]);
+it("finds nested host and Super Web Agent residue under explicit roots", async () => {
+  const root = await mkdtemp(join(tmpdir(), "swa-residue-")); directories.push(root);
+  const nested = join(root, "cache", "version", "super-web-agent-lifecycle-spike", "state"); await mkdir(nested, { recursive: true }); await writeFile(join(nested, "proof"), "x");
+  await expect(findNamedResidue([join(root, "cache"), join(root, "missing")])).resolves.toEqual([join(root, "cache", "version", "super-web-agent-lifecycle-spike")]);
 });
 
-it("records injectable Navact-owned residue as a failed lifecycle condition", async () => {
-  const report = await runHarness("claude-code", fakeAdapter("claude-code", []), validRuns("claude-code"), { findNavactOwnedResidue: async () => ["C:\\Users\\u\\AppData\\Roaming\\Navact\\navact-lifecycle-spike"] });
-  expect(report.removal.navactOwnedResiduePaths).toHaveLength(1);
+it("records injectable SWA-owned residue as a failed lifecycle condition", async () => {
+  const report = await runHarness("claude-code", fakeAdapter("claude-code", []), validRuns("claude-code"), { findSwaOwnedResidue: async () => ["C:\\Users\\u\\AppData\\Roaming\\Super Web Agent\\super-web-agent-lifecycle-spike"] });
+  expect(report.removal.swaOwnedResiduePaths).toHaveLength(1);
 });
 
 it("records partial update and cleanup command failures without sensitive outputs", async () => {
@@ -216,7 +216,7 @@ it("rejects a lexically-inside crash Runtime symlink escape", async () => {
 });
 
 it("records an existing explicit owned root even when no child name matches", async () => {
-  const root = await mkdtemp(join(tmpdir(), "navact-owned-")); directories.push(root);
+  const root = await mkdtemp(join(tmpdir(), "swa-owned-")); directories.push(root);
   await writeFile(join(root, "state.json"), "{}");
   await expect(findNamedResidue([root], true)).resolves.toEqual([root]);
 });
@@ -235,7 +235,7 @@ function fakeAdapter(host: LifecycleHost, calls: string[]): PluginHostAdapter {
   return { host, marketplaceName: "market", selector: "selector", version: async () => ({ ...observation("version"), stdout: host === "claude-code" ? "2.1.197" : "0.145.0-alpha.23" }), addMarketplace: async () => { calls.push("add"); return observation("add"); }, install: async () => { calls.push("install"); return observation("install"); }, update: async () => { calls.push("update"); return [observation("update")]; }, runPrompt: async (prompt) => { const phase = prompt.includes("initial-") ? "initial" : prompt.includes("updated-") ? "updated" : prompt.includes("fresh-") ? "fresh" : "crash"; calls.push(phase); return observation(phase); }, uninstall: async () => { calls.push("uninstall"); return observation("uninstall"); }, removeMarketplace: async () => { calls.push("remove"); return observation("remove"); } };
 }
 async function runHarness(host: LifecycleHost, adapter: PluginHostAdapter, runs: Record<string, LifecycleEvent[]>, extra: Partial<PluginLifecycleHarnessDependencies> = {}) {
-  return runPluginLifecycle({ host, cliLaunch: { displayName: host === "claude-code" ? "claude" : "codex", executable: "/host/cli", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: host === "claude-code" ? { ANTHROPIC_API_KEY: "present" } : { OPENAI_API_KEY: "present" } }, { createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: currentPlatform, versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }), readEvents: async (_path: string, runId: string) => runs[runId] ?? [], sha256File: async (path: string) => path.includes("0.0.1") ? digest1 : digest2, resolveRealpath: async (path: string) => path, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], findNavactOwnedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {}, ...extra });
+  return runPluginLifecycle({ host, cliLaunch: { displayName: host === "claude-code" ? "claude" : "codex", executable: "/host/cli", prefixArgs: [] }, fixtureOutputRoot: "/fixtures", projectDirectory: "/project", evidenceDirectory: "/evidence", environment: host === "claude-code" ? { ANTHROPIC_API_KEY: "present" } : { OPENAI_API_KEY: "present" } }, { createAdapter: () => adapter, activateFixture: async () => "/active", readFixtureIndex: async () => ({ schemaVersion: 1, platform: currentPlatform, versions: ["0.0.1", "0.0.2"], runtimeArtifacts: { "0.0.1": { sha256: digest1, bytes: 1 }, "0.0.2": { sha256: digest2, bytes: 2 } } }), readEvents: async (_path: string, runId: string) => runs[runId] ?? [], sha256File: async (path: string) => path.includes("0.0.1") ? digest1 : digest2, resolveRealpath: async (path: string) => path, waitForProcessExit: async () => true, findHostManagedResidue: async () => [], findSwaOwnedResidue: async () => [], now: () => 1, prepareEvidenceDirectory: async () => {}, ...extra });
 }
 
 function observation(command: string) { return { command, exitCode: 0, stdout: "secret", stderr: "secret", startedAtMs: 100, durationMs: 1 }; }

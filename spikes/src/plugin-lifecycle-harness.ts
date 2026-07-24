@@ -16,7 +16,7 @@ export interface PluginLifecycleHarnessDependencies {
   readEvents(path: string, runId: string): Promise<LifecycleEvent[]>;
   waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean>;
   findHostManagedResidue(host: LifecycleHost): Promise<string[]>;
-  findNavactOwnedResidue(): Promise<string[]>;
+  findSwaOwnedResidue(): Promise<string[]>;
   sha256File(path: string): Promise<string>;
   resolveRealpath(path: string): Promise<string>;
   now(): number;
@@ -31,7 +31,7 @@ const platform = (): "darwin-arm64" | "win32-x64" => {
 const defaults: PluginLifecycleHarnessDependencies = {
   createAdapter: createPluginHostAdapter, activateFixture: activatePluginFixtureVersion,
   readFixtureIndex: async (path) => parsePluginLifecycleFixtureIndex(JSON.parse(await readFile(path, "utf8"))),
-  readEvents: readRunEvents, waitForProcessExit, findHostManagedResidue, findNavactOwnedResidue, sha256File, resolveRealpath: realpath,
+  readEvents: readRunEvents, waitForProcessExit, findHostManagedResidue, findSwaOwnedResidue, sha256File, resolveRealpath: realpath,
   now: () => Date.now(), prepareEvidenceDirectory: async (path) => { await rm(path, { recursive: true, force: true }); await mkdir(path, { recursive: true, mode: 0o700 }); },
 };
 
@@ -82,7 +82,7 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
   };
   const prompt = async (runId: string, version: Version, text: string, allowFailure = false): Promise<{ command: CommandObservation; events: LifecycleEvent[] }> => {
     const evidencePath = join(input.evidenceDirectory, `${runId}.jsonl`);
-    const environment = { ...input.environment, NAVACT_SPIKE_EVIDENCE_PATH: evidencePath, NAVACT_SPIKE_HOST: input.host, NAVACT_SPIKE_RUN_ID: runId, NAVACT_SPIKE_PLUGIN_VERSION: version };
+    const environment = { ...input.environment, SWA_SPIKE_EVIDENCE_PATH: evidencePath, SWA_SPIKE_HOST: input.host, SWA_SPIKE_RUN_ID: runId, SWA_SPIKE_PLUGIN_VERSION: version };
     const command = await adapter.runPrompt(text, input.projectDirectory, environment, allowFailure); commands.push(command.command);
     const events = await d.readEvents(evidencePath, runId); return { command, events };
   };
@@ -134,17 +134,17 @@ export async function runPluginLifecycle(input: PluginLifecycleHarnessInput, inj
   if (ownsPlugin) { try { const command = await adapter.uninstall(input.projectDirectory); commands.push(command.command); report.removal.pluginRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed (${command.exitCode})`); } catch (error) { captureFailure(error, "plugin cleanup failed"); } }
   if (ownsMarketplace) { try { const command = await adapter.removeMarketplace(input.projectDirectory); commands.push(command.command); report.removal.marketplaceRemoved = command.exitCode === 0; if (command.exitCode !== 0) errors.push(`host command failed (${command.exitCode})`); } catch (error) { captureFailure(error, "marketplace cleanup failed"); } }
   report.removal.noLiveRuntime = (await Promise.all([...pids].map((pid) => d.waitForProcessExit(pid, 10_000)))).every(Boolean);
-  try { report.removal.hostManagedResiduePaths = await d.findHostManagedResidue(input.host); report.removal.navactOwnedResiduePaths = await d.findNavactOwnedResidue(); } catch { errors.push("host residue inspection failed"); report.removal.noLiveRuntime = false; }
+  try { report.removal.hostManagedResiduePaths = await d.findHostManagedResidue(input.host); report.removal.swaOwnedResiduePaths = await d.findSwaOwnedResidue(); } catch { errors.push("host residue inspection failed"); report.removal.noLiveRuntime = false; }
   return parsePluginLifecycleHostReport(report);
 }
 
 function emptyReport(host: LifecycleHost, target: "darwin-arm64" | "win32-x64", index: PluginLifecycleFixtureIndex, commands: string[], errors: string[]): PluginLifecycleHostReport {
   const unknown = "unknown"; const zero = "0".repeat(64);
-  return { schemaVersion: 1, runtimeVersion: "0.0.0-spike", host, hostVersion: unknown, platform: target, runtimeArtifacts: index.runtimeArtifacts, pluginVersions: ["0.0.1", "0.0.2"], installUserSteps: 2, updateUserSteps: host === "claude-code" ? 2 : 1, removalUserSteps: 2, manualConfigEdits: 0, administratorPrivilegesRequested: false, separateInstallerUsed: false, hostNodeRequired: false, initial: { healthPassed: false, cleanStopPassed: false, launchedFromHostCache: false, pid: 1, startupLatencyMs: 0, healthLatencyMs: 0, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, update: { healthPassed: false, cleanStopPassed: false, launchedFromHostCache: false, pid: 1, observedPluginVersion: unknown, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, crashRecovery: { crashObserved: false, sameSessionRestartObserved: false, freshSessionRecoveryPassed: false, reinstallRequired: false, launchedFromHostCache: false, recoveredPid: 1, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, removal: { pluginRemoved: false, marketplaceRemoved: false, noLiveRuntime: false, hostManagedResiduePaths: [], navactOwnedResiduePaths: [] }, commands, errors };
+  return { schemaVersion: 1, runtimeVersion: "0.0.0-spike", host, hostVersion: unknown, platform: target, runtimeArtifacts: index.runtimeArtifacts, pluginVersions: ["0.0.1", "0.0.2"], installUserSteps: 2, updateUserSteps: host === "claude-code" ? 2 : 1, removalUserSteps: 2, manualConfigEdits: 0, administratorPrivilegesRequested: false, separateInstallerUsed: false, hostNodeRequired: false, initial: { healthPassed: false, cleanStopPassed: false, launchedFromHostCache: false, pid: 1, startupLatencyMs: 0, healthLatencyMs: 0, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, update: { healthPassed: false, cleanStopPassed: false, launchedFromHostCache: false, pid: 1, observedPluginVersion: unknown, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, crashRecovery: { crashObserved: false, sameSessionRestartObserved: false, freshSessionRecoveryPassed: false, reinstallRequired: false, launchedFromHostCache: false, recoveredPid: 1, observedRuntimeBuildId: unknown, observedRuntimeSha256: zero }, removal: { pluginRemoved: false, marketplaceRemoved: false, noLiveRuntime: false, hostManagedResiduePaths: [], swaOwnedResiduePaths: [] }, commands, errors };
 }
 export async function readRunEvents(path: string, runId: string): Promise<LifecycleEvent[]> { return (await readFile(path, "utf8")).split("\n").filter(Boolean).map(parseLifecycleEventLine).filter((event) => event.runId === runId); }
 export async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> { const end = Date.now() + timeoutMs; do { try { process.kill(pid, 0); } catch (error: unknown) { const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined; if (code === "ESRCH") return true; } await new Promise((done) => setTimeout(done, 25)); } while (Date.now() < end); return false; }
-export async function findNamedResidue(roots: string[], includeExistingRoot = false): Promise<string[]> { const result: string[] = []; const visit = async (directory: string, root = false): Promise<void> => { let entries; try { entries = await readdir(directory, { withFileTypes: true }); } catch (error: unknown) { const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined; if (code === "ENOENT") return; throw error; } if (root && includeExistingRoot) result.push(directory); for (const entry of entries) { const path = join(directory, entry.name); if (entry.name.includes("navact-lifecycle-spike")) result.push(path); if (entry.isDirectory()) await visit(path); } }; for (const root of roots) await visit(root, true); return result; }
+export async function findNamedResidue(roots: string[], includeExistingRoot = false): Promise<string[]> { const result: string[] = []; const visit = async (directory: string, root = false): Promise<void> => { let entries; try { entries = await readdir(directory, { withFileTypes: true }); } catch (error: unknown) { const code = typeof error === "object" && error !== null && "code" in error ? (error as { code?: string }).code : undefined; if (code === "ENOENT") return; throw error; } if (root && includeExistingRoot) result.push(directory); for (const entry of entries) { const path = join(directory, entry.name); if (entry.name.includes("super-web-agent-lifecycle-spike")) result.push(path); if (entry.isDirectory()) await visit(path); } }; for (const root of roots) await visit(root, true); return result; }
 export async function findHostManagedResidue(host: LifecycleHost): Promise<string[]> { return findNamedResidue([join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "cache"), join(homedir(), host === "claude-code" ? ".claude" : ".codex", "plugins", "data")]); }
-export async function findNavactOwnedResidue(): Promise<string[]> { return findNamedResidue([join(homedir(), ".navact"), join(homedir(), ".local", "share", "navact"), join(homedir(), "Library", "Application Support", "Navact"), join(homedir(), "AppData", "Roaming", "Navact")], true); }
+export async function findSwaOwnedResidue(): Promise<string[]> { return findNamedResidue([join(homedir(), ".super-web-agent"), join(homedir(), ".local", "share", "super-web-agent"), join(homedir(), "Library", "Application Support", "Super Web Agent"), join(homedir(), "AppData", "Roaming", "Super Web Agent")], true); }
 export async function sha256File(path: string): Promise<string> { return createHash("sha256").update(await readFile(path)).digest("hex"); }
