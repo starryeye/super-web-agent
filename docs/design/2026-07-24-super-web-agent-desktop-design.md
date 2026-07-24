@@ -13,14 +13,16 @@ desktop applications. The first public release supports both Codex Desktop and
 Claude Desktop. Development completes the Codex Desktop vertical slice first,
 then packages the same provider-neutral Runtime for Claude Desktop.
 
-Users install two independent artifacts:
+For the first release, users install two independent artifacts:
 
 1. an SWA integration for their AI desktop application; and
 2. the SWA Chrome Extension.
 
-The desktop integration installs and manages the local Runtime. The Chrome
-Extension connects that Runtime to the user's existing Chrome profile and
-login sessions. Users do not provide OpenAI, Anthropic, or SWA API keys.
+The desktop integration installs and manages the local Runtime. A Browser
+Bridge connects that Runtime to a browser. The first Browser Bridge
+implementation is the Chrome Extension, which uses the user's existing Chrome
+profile and login sessions. Users do not provide OpenAI, Anthropic, or SWA API
+keys.
 
 The project adopts the new identity as a clean break. Current source,
 packages, protocols, documentation, repositories, and active branches use only
@@ -28,9 +30,11 @@ the new identity. Existing Git commit history remains unchanged.
 
 ## 2. Product Purpose
 
-SWA helps an AI desktop application understand and operate the user's existing
-Chrome with less context, fewer observations, and fewer model-browser
-round-trips.
+SWA helps an AI desktop application understand and operate a browser with less
+context, fewer observations, and fewer model-browser round-trips. A
+provider-neutral Browser Bridge contract separates the Core Runtime from any
+specific browser integration. The first release implements that contract for
+the user's existing Chrome.
 
 Existing browser tools often repeat a costly loop:
 
@@ -94,7 +98,7 @@ The `docs/superpowers/` and `.superpowers/` paths retain their names because
 they identify a development workflow rather than the product. Their existing
 Git-ignore policy also remains unchanged.
 
-## 4. Supported Desktop Surfaces
+## 4. Supported First-Release Surfaces
 
 The first public release requires:
 
@@ -107,9 +111,9 @@ Codex distributes SWA as a marketplace plugin with a
 Desktop distributes SWA as a local MCP Bundle (`.mcpb`). Both packages contain
 the same platform-specific Runtime bytes for the same SWA version.
 
-The Chrome Extension is a separate installation and release artifact. The
-desktop packages and Chrome Extension remain separate components in one
-canonical public source repository.
+The Chrome Extension is the first Browser Bridge and is a separate installation
+and release artifact. The desktop packages and Chrome Extension remain separate
+components in one canonical public source repository.
 
 Current platform constraints are based on the official host documentation:
 
@@ -122,14 +126,14 @@ Current platform constraints are based on the official host documentation:
 Codex Desktop
 └── SWA Codex Plugin
     └── SWA Core Runtime A ─┐
-                            ├── SWA Chrome Extension ── Existing Chrome
-Claude Desktop              │
+                            ├── Browser Bridge contract
+Claude Desktop              │   └── v1: SWA Chrome Extension ── Existing Chrome
 └── SWA Desktop Extension   │
     └── SWA Core Runtime B ─┘
 ```
 
 The first release uses one Runtime process per AI desktop integration. This
-keeps lifecycle ownership and failure isolation simple. The Chrome Extension
+keeps lifecycle ownership and failure isolation simple. The v1 Chrome Bridge
 can maintain multiple authenticated Runtime pairings, but one Chrome tab has
 only one active, expiring execution lease at a time.
 
@@ -162,26 +166,34 @@ The provider-neutral Runtime owns:
 - policy classification and approval requests;
 - Runtime, Agent, and Browser Session state;
 - local traces and benchmark measurements; and
-- the authenticated bridge protocol to the Chrome Extension.
+- the authenticated, browser-neutral Browser Bridge protocol.
 
 The Runtime performs no external model inference and calls no OpenAI or
 Anthropic model API.
 
-### 5.3 Chrome Extension Responsibilities
+### 5.3 Browser Bridge Responsibilities
 
-The Chrome Extension owns browser-only capabilities:
+Every Browser Bridge implementation must provide:
 
-- access to the user's existing Chrome tabs and login sessions;
-- site, origin, and tab permission UI;
-- DOM, ARIA, form, visibility, and geometry observation;
+- access to browser pages and their active login sessions;
+- browser-native site, origin, and page permission UI;
+- structured page, accessibility, form, visibility, and geometry observation;
 - browser action execution and low-level verification;
 - mutation coalescing and resynchronization signals;
-- exclusive tab-lease arbitration; and
+- exclusive page-lease arbitration; and
 - trusted approval UI for high-risk actions.
+
+The first implementation is the SWA Chrome Extension. A future CDP or other
+browser adapter may implement the same contract only if it preserves the
+required installation experience, authenticated local transport, structured
+observations, user-consent boundary, existing-session access, and safety
+semantics. Such adapters are not part of the first release. Screenshot-only
+computer control is a fallback, not a primary Browser Bridge, because it does
+not provide the structured state required by the core product hypothesis.
 
 ## 6. Installation and Pairing Experience
 
-The target installation flow is:
+The first-release installation flow is:
 
 ```text
 1. Install SWA in the signed-in Codex Desktop or Claude Desktop application.
@@ -202,22 +214,23 @@ The user does not:
 - edit MCP configuration files; or
 - move to another browser or login session.
 
-The pairing code is not an account credential or API key. It is a
-short-lived local authorization proof between one Runtime and the Chrome
-Extension. After confirmation, each side stores a rotatable local credential
-in its host-protected data area. The Runtime listens only on loopback and
-rejects unauthenticated connections.
+The pairing code is not an account credential or API key. It is a short-lived
+local authorization proof between one Runtime and the active Browser Bridge.
+For v1, that Bridge is the Chrome Extension. After confirmation, each side
+stores a rotatable local credential in its host-protected data area. The
+Runtime listens only on loopback and rejects unauthenticated connections.
 
 ## 7. Security and Concurrency
 
-The Chrome Extension is the trusted user-consent surface for browser access and
-high-risk actions. A desktop application's approval cannot replace the
-Extension's final approval for communication, financial, destructive, or other
-externally consequential actions.
+The active Browser Bridge is the trusted user-consent surface for browser
+access and high-risk actions. In v1, that surface is the Chrome Extension. A
+desktop application's approval cannot replace the Bridge's final approval for
+communication, financial, destructive, or other externally consequential
+actions.
 
 Each paired Runtime has a distinct identity. When Codex Desktop and Claude
-Desktop run simultaneously, the Extension may connect to both, but it grants an
-exclusive, expiring execution lease per tab. A Runtime must reacquire a lease
+Desktop run simultaneously, the Bridge may connect to both, but it grants an
+exclusive, expiring execution lease per page. A Runtime must reacquire a lease
 after expiration, disconnect, restart, or document replacement.
 
 Runtime restart invalidates pending approvals, resume tokens, reference
@@ -230,14 +243,14 @@ Errors are explicit, structured, and actionable:
 
 | Condition | Required behavior |
 | --- | --- |
-| Chrome Extension missing | Return an install-required state with the official installation path. |
+| Browser Bridge missing | Return an install-required state; v1 links to the official Chrome Extension. |
 | Runtime not paired | Generate a new one-time pairing flow. |
 | Runtime launch failure | Attempt bounded automatic restart, then return sanitized diagnostics. |
 | Protocol or artifact version mismatch | Stop automatic use and request the required update. |
-| Tab or origin permission missing | Ask through the Chrome Extension's trusted UI. |
-| Runtime–Extension connection lost | Stop execution, discard unsafe transient state, reconnect, and resynchronize. |
-| Tab lease held by another Runtime | Report the owner and require explicit handoff or lease expiry. |
-| High-risk action reached | Pause and request Extension approval before the side effect. |
+| Page or origin permission missing | Ask through the active Browser Bridge's trusted UI. |
+| Runtime–Bridge connection lost | Stop execution, discard unsafe transient state, reconnect, and resynchronize. |
+| Page lease held by another Runtime | Report the owner and require explicit handoff or lease expiry. |
+| High-risk action reached | Pause and request Browser Bridge approval before the side effect. |
 | Model-provider API key absent | Continue normally; such a key is not an SWA dependency. |
 
 SWA never silently guesses after an ambiguous reference, unexpected
@@ -270,7 +283,7 @@ The replacement evidence targets:
 - Codex Desktop plugin packaging and installation;
 - Claude Desktop `.mcpb` packaging and installation;
 - keyless CI for deterministic package and protocol verification;
-- Chrome Extension pairing and permission integration; and
+- Browser Bridge contract plus v1 Chrome pairing and permission integration; and
 - manual acceptance tests in signed-in desktop applications.
 
 ## 10. Repository and Branch Migration
@@ -312,11 +325,12 @@ On macOS ARM64 and Windows x64, verify Runtime artifacts, Codex plugin bundles,
 Claude `.mcpb` bundles, integrity, installation, start, clean stop, update,
 bounded crash recovery, and removal.
 
-### 11.3 Chrome Integration Tests
+### 11.3 Browser Bridge and Chrome Integration Tests
 
-Use public fixture pages to verify installation detection, pairing, permission
-denial and grant, DOM observation, action execution, navigation, reconnect, and
-full resynchronization.
+Run the browser-neutral Bridge contract suite against public fixture pages.
+Then verify the v1 Chrome implementation's installation detection, pairing,
+permission denial and grant, structured observation, action execution,
+navigation, reconnect, and full resynchronization.
 
 ### 11.4 Desktop Acceptance Tests
 
@@ -346,9 +360,11 @@ Work proceeds in this order:
 
 1. publish the approved design and complete the repository-wide rename;
 2. replace the current authenticated CLI lifecycle gate with keyless evidence;
-3. complete the Codex Desktop installation-to-Chrome vertical slice;
+3. complete the Codex Desktop installation-to-Browser-Bridge vertical slice
+   with the v1 Chrome implementation;
 4. package the same Runtime as a Claude Desktop `.mcpb`;
-5. complete cross-host lifecycle, pairing, and Chrome integration evidence; and
+5. complete cross-host lifecycle, pairing, Browser Bridge contract, and v1
+   Chrome integration evidence; and
 6. begin the Page Model and action-execution production slices only after the
    desktop lifecycle gate passes.
 
