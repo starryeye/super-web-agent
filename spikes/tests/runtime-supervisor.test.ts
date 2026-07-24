@@ -28,6 +28,10 @@ import {
 
 const temporaryDirectories: string[] = [];
 
+function isRuntimeStagingDirectory(name: string): boolean {
+  return /^navact-runtime-(?:[A-Za-z0-9]{6}|[a-f0-9]{64})$/.test(name);
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -149,7 +153,9 @@ it("retries an unobserved close and reaps a later final close without accepting 
 it("releases staging after a synchronous pre-child spawn failure", async () => {
   const serverPath = await healthArtifact();
   const fixture = await signedArtifact(serverPath);
-  const baseline = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("navact-runtime-")));
+  const baseline = new Set((await readdir(tmpdir())).filter(isRuntimeStagingDirectory));
+  const foreignDirectory = await mkdtemp(join(tmpdir(), "navact-runtime-build-id-"));
+  temporaryDirectories.push(foreignDirectory);
   const supervisor = new RuntimeSupervisor({
     ...fixture,
     launch: { kind: "host-node", artifactPath: serverPath, cwd: "invalid\0cwd" },
@@ -167,14 +173,15 @@ it("releases staging after a synchronous pre-child spawn failure", async () => {
   } catch (error) {
     stopError = error;
   }
-  const afterStop = (await readdir(tmpdir())).filter((name) => name.startsWith("navact-runtime-"));
+  const afterStop = (await readdir(tmpdir())).filter(isRuntimeStagingDirectory);
   const leaked = afterStop.filter((name) => !baseline.has(name));
-  await Promise.all(leaked.map((name) => rm(join(tmpdir(), name), { recursive: true, force: true })));
+  temporaryDirectories.push(...leaked.map((name) => join(tmpdir(), name)));
 
   expect(startError).toBeInstanceOf(TypeError);
   expect(String(startError)).toMatch(/null bytes|NUL|invalid/i);
   expect(stopError).toBeUndefined();
   expect(supervisor.state).toBe("idle");
+  expect(await readdir(tmpdir())).toContain(basename(foreignDirectory));
   expect(leaked).toEqual([]);
 });
 

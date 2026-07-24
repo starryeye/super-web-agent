@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { build } from "esbuild";
 
 const seaFuse = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
+const postjectCli = createRequire(import.meta.url).resolve("postject/dist/cli.js");
 
 export interface SelfContainedRuntimeBuildInput {
   entryPoint: string;
@@ -65,9 +67,7 @@ export async function buildSelfContainedRuntime(input: SelfContainedRuntimeBuild
   await mkdir(dirname(input.outputPath), { recursive: true });
   await copyFile(process.execPath, input.outputPath);
   if (process.platform === "darwin") runChecked("/usr/bin/codesign", ["--remove-signature", input.outputPath]);
-  const pnpmEntry = process.env.npm_execpath;
-  if (pnpmEntry === undefined) throw new Error("pnpm did not provide npm_execpath");
-  const postjectArgs = [pnpmEntry, "exec", "postject", input.outputPath, "NODE_SEA_BLOB", preparationBlob, "--sentinel-fuse", seaFuse];
+  const postjectArgs = [postjectCli, input.outputPath, "NODE_SEA_BLOB", preparationBlob, "--sentinel-fuse", seaFuse];
   if (process.platform === "darwin") postjectArgs.push("--macho-segment-name", "NODE_SEA");
   runChecked(process.execPath, postjectArgs);
   if (process.platform === "darwin") runChecked("/usr/bin/codesign", ["--sign", "-", input.outputPath]);

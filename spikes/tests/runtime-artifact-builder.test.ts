@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { buildSelfContainedRuntime } from "../src/runtime-artifact-builder.js";
 
@@ -53,7 +53,7 @@ it("embeds each requested build ID in a running self-contained Runtime", async (
     `import { RUNTIME_BUILD_ID } from ${JSON.stringify(resolve(process.cwd(), "src", "runtime-build-id.ts"))}; process.stdout.write(RUNTIME_BUILD_ID);`,
   );
   const originalPnpmEntry = process.env.npm_execpath;
-  process.env.npm_execpath ??= join(dirname(process.execPath), "..", "node_modules", "pnpm", "bin", "pnpm.cjs");
+  process.env.npm_execpath = join(directory, "missing-pnpm.cjs");
   try {
     for (const runtimeBuildId of ["0.0.1", "0.0.2"] as const) {
       const outputPath = join(directory, runtimeBuildId, process.platform === "win32" ? "navact-runtime.exe" : "navact-runtime");

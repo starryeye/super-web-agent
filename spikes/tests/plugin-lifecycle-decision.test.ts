@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { expect, it } from "vitest";
 import {
   evaluatePluginLifecycleEvidence,
@@ -203,7 +203,7 @@ it("writes a calculated Rejected decision and exits 1 for a failed existing cell
 });
 
 it("enforces the manual-only workflow topology and safe host CLI setup", async () => {
-  const workflow = await readFile(resolve("..", ".github", "workflows", "plugin-lifecycle-spike.yml"), "utf8");
+  const workflow = (await readFile(resolve("..", ".github", "workflows", "plugin-lifecycle-spike.yml"), "utf8")).replace(/\r\n/g, "\n");
   expect(workflow).toMatch(/^on:\n  workflow_dispatch:$/m);
   expect(workflow).not.toMatch(/^\s*(push|pull_request):/m);
   for (const runner of ["macos-15", "windows-2025"]) expect(workflow).toContain(`runner: ${runner}`);
@@ -231,5 +231,10 @@ it("enforces the manual-only workflow topology and safe host CLI setup", async (
 });
 
 function runWriter(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((complete) => execFile("pnpm", ["write:plugin-lifecycle-decision", ...args], { cwd: process.cwd() }, (error, stdout, stderr) => complete({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr })));
+  const pnpmEntry = process.env.npm_execpath;
+  if (pnpmEntry === undefined || !isAbsolute(pnpmEntry)) return Promise.reject(new Error("pnpm did not provide a valid npm_execpath"));
+  return new Promise((complete, reject) => execFile(process.execPath, [pnpmEntry, "write:plugin-lifecycle-decision", ...args], { cwd: process.cwd() }, (error, stdout, stderr) => {
+    if (error !== null && typeof error.code !== "number") { reject(error); return; }
+    complete({ code: typeof error?.code === "number" ? error.code : 0, stdout, stderr });
+  }));
 }
