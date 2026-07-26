@@ -8,6 +8,7 @@
     "test": "vitest run",
     "verify": "pnpm build && pnpm typecheck && pnpm test",
     "build:runtime": "pnpm build && node dist/scripts/build-runtime.js",
+    "build:keyless-plugin-fixtures": "pnpm build && node dist/scripts/build-keyless-plugin-fixtures.js",
     "write:artifact-decision": "pnpm build && node dist/scripts/write-artifact-decision.js"
   },
   "dependencies": {
