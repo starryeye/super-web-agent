@@ -10,6 +10,7 @@
     "spikes:build-keyless-plugin-fixtures": "pnpm -C spikes build:keyless-plugin-fixtures",
     "spikes:test": "pnpm -C spikes test",
     "spikes:typecheck": "pnpm -C spikes typecheck",
-    "spikes:verify": "pnpm -C spikes verify"
+    "spikes:verify": "pnpm -C spikes verify",
+    "spikes:write-keyless-lifecycle-decision": "pnpm -C spikes write:keyless-lifecycle-decision"
   }
 }
