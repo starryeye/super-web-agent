@@ -2,7 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-export function buildHealthServer(): McpServer {
+export interface RuntimeIdentity {
+  readonly runtimeSessionId: string;
+  readonly runtimeBuildId: string;
+}
+
+export interface HealthServerLifecycle {}
+
+export function buildHealthServer(identity: RuntimeIdentity, _lifecycle?: HealthServerLifecycle): McpServer {
   const server = new McpServer({
     name: "super-web-agent-runtime-spike",
     version: "0.0.0-spike",
@@ -17,6 +24,8 @@ export function buildHealthServer(): McpServer {
         nonce: z.string(),
         pid: z.number().int().positive(),
         platform: z.string(),
+        runtimeSessionId: z.string(),
+        runtimeBuildId: z.string(),
       },
     },
     async ({ nonce }) => {
@@ -25,6 +34,28 @@ export function buildHealthServer(): McpServer {
         nonce,
         pid: process.pid,
         platform: `${process.platform}-${process.arch}`,
+        ...identity,
+      };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(output) }],
+        structuredContent: output,
+      };
+    },
+  );
+  server.registerTool(
+    "swa_spike_bridge_status",
+    {
+      description: "Return the deterministic pre-bridge Runtime status.",
+      inputSchema: {},
+      outputSchema: {
+        runtime: z.literal("ready"),
+        bridge: z.object({ state: z.literal("not-installed") }),
+      },
+    },
+    async () => {
+      const output = {
+        runtime: "ready" as const,
+        bridge: { state: "not-installed" as const },
       };
       return {
         content: [{ type: "text" as const, text: JSON.stringify(output) }],
@@ -35,6 +66,6 @@ export function buildHealthServer(): McpServer {
   return server;
 }
 
-export async function startHealthServer(): Promise<void> {
-  await buildHealthServer().connect(new StdioServerTransport());
+export async function startHealthServer(identity: RuntimeIdentity, lifecycle?: HealthServerLifecycle): Promise<void> {
+  await buildHealthServer(identity, lifecycle).connect(new StdioServerTransport());
 }

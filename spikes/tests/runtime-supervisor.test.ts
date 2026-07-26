@@ -59,17 +59,21 @@ async function healthArtifact(stubborn = false): Promise<string> {
   temporaryDirectories.push(directory);
   const artifactPath = join(directory, stubborn ? "stubborn-health.mjs" : "mcp-health-entry.mjs");
   const healthServerUrl = pathToFileURL(resolve("dist/src/mcp-health-server.js")).href;
+  const runtimeBuildIdUrl = pathToFileURL(resolve("dist/src/runtime-build-id.js")).href;
+  const runtimeSessionUrl = pathToFileURL(resolve("dist/src/runtime-session.js")).href;
   await writeFile(
     artifactPath,
     [
       `import { startHealthServer } from ${JSON.stringify(healthServerUrl)};`,
+      `import { RUNTIME_BUILD_ID } from ${JSON.stringify(runtimeBuildIdUrl)};`,
+      `import { createRuntimeSessionId } from ${JSON.stringify(runtimeSessionUrl)};`,
       ...(stubborn
         ? [
             'if (process.platform !== "win32") process.on("SIGTERM", () => undefined);',
             "setInterval(() => undefined, 1_000);",
           ]
         : []),
-      "await startHealthServer();",
+      "await startHealthServer({ runtimeSessionId: createRuntimeSessionId(), runtimeBuildId: RUNTIME_BUILD_ID });",
       "",
     ].join("\n"),
   );
@@ -249,6 +253,31 @@ it("freezes premature exit before a later final close", async () => {
   setTimeout(() => fakeChild.emit("close", 0, null), 20);
   await expect(closePromise).rejects.toThrow("Runtime did not exit cleanly");
   expect(transport.finalCloseObserved).toBe(true);
+});
+
+it("waits for a naturally crashed child without requesting shutdown", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "swa-crash-observation-"));
+  const entry = join(directory, "crash.mjs");
+  await writeFile(entry, "setTimeout(() => process.exit(86), 20);\n");
+  const killSpy = vi.spyOn(ChildProcess.prototype, "kill");
+  const transport = new RuntimeStdioTransport({
+    command: process.execPath,
+    args: [entry],
+    stderr: "pipe",
+  });
+  try {
+    await transport.start();
+    await expect(transport.waitForFinalClose(1_000)).resolves.toBe(true);
+    expect(transport.exitObservation).toEqual({
+      code: 86,
+      signal: null,
+      premature: true,
+    });
+    expect(killSpy).not.toHaveBeenCalled();
+  } finally {
+    killSpy.mockRestore();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 it("stages signed bytes independently from later source mutation", async () => {

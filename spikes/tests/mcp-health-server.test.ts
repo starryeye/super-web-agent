@@ -10,7 +10,7 @@ afterEach(async () => {
   client = undefined;
 });
 
-it("answers a real MCP tool call over stdio", async () => {
+it("returns process identity and the deterministic pre-bridge state", async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [resolve("dist/src/mcp-health-entry.js")],
@@ -32,13 +32,37 @@ it("answers a real MCP tool call over stdio", async () => {
       description: "Return disposable SWA Runtime artifact-spike health.",
     }),
   );
-  const result = await client.callTool({
+  const first = await client.callTool({
     name: "swa_spike_health",
     arguments: { nonce: "n-1" },
   });
-  expect(result.structuredContent).toMatchObject({
+  expect(first.structuredContent).toMatchObject({
     status: "ok",
     nonce: "n-1",
     platform: `${process.platform}-${process.arch}`,
+    runtimeSessionId: expect.stringMatching(/^rt_[0-9a-f]{32}$/),
+    runtimeBuildId: "direct-test",
+  });
+  const firstIdentity = first.structuredContent as { pid: number; runtimeSessionId: string } | undefined;
+  expect(firstIdentity?.pid).toEqual(expect.any(Number));
+  expect(Number.isInteger(firstIdentity?.pid)).toBe(true);
+  expect(firstIdentity?.pid).toBeGreaterThan(0);
+
+  const second = await client.callTool({
+    name: "swa_spike_health",
+    arguments: { nonce: "n-2" },
+  });
+  expect(second.structuredContent).toMatchObject({
+    pid: firstIdentity?.pid,
+    runtimeSessionId: firstIdentity?.runtimeSessionId,
+  });
+
+  const bridge = await client.callTool({
+    name: "swa_spike_bridge_status",
+    arguments: {},
+  });
+  expect(bridge.structuredContent).toEqual({
+    runtime: "ready",
+    bridge: { state: "not-installed" },
   });
 });

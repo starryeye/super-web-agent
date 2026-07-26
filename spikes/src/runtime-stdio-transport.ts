@@ -248,7 +248,10 @@ export class RuntimeStdioTransport implements Transport {
     }
   }
 
-  private waitForFinalClose(timeoutMs: number): Promise<boolean> {
+  async waitForFinalClose(timeoutMs: number): Promise<boolean> {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new Error("final close timeout must be a positive safe integer");
+    }
     if (this.observedFinalClose) return Promise.resolve(true);
     return new Promise((resolve) => {
       let settled = false;
