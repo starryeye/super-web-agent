@@ -36,6 +36,13 @@ it("parses and passes a complete sanitized Desktop acceptance record", () => {
   });
 });
 
+it("rejects a calendar-invalid timestamp instead of accepting its normalized date", () => {
+  const record = passingRecord();
+  record.recordedAt = "2026-02-30T12:00:00.000Z";
+
+  expect(() => parseCodexDesktopAcceptanceRecord(record)).toThrow("invalid Codex Desktop acceptance timestamp");
+});
+
 it.each([
   ["unknown record key", (record: Record<string, unknown>) => { record.rawLog = "hidden"; }],
   ["raw log note", (record: Record<string, unknown>) => { record.notes = ["stdout: hidden"]; }],

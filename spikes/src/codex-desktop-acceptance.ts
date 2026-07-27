@@ -54,9 +54,12 @@ function requireBoolean(value: unknown, label: string): boolean {
 }
 
 function requireRecordedAt(value: unknown): string {
-  if (typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value) ||
-    Number.isNaN(Date.parse(value))) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) {
+    throw new Error("invalid Codex Desktop acceptance timestamp");
+  }
+  const timestamp = new Date(value);
+  const canonical = value.includes(".") ? value : `${value.slice(0, -1)}.000Z`;
+  if (Number.isNaN(timestamp.getTime()) || timestamp.toISOString() !== canonical) {
     throw new Error("invalid Codex Desktop acceptance timestamp");
   }
   return value;
