@@ -44,6 +44,7 @@ export interface LifecycleMcpClient {
 export interface LifecycleRuntimeTransport {
   readonly processOwnershipResolved: boolean;
   readonly exitObservation: Readonly<RuntimeExitObservation> | undefined;
+  close(): Promise<void>;
   waitForFinalClose(timeoutMs: number): Promise<boolean>;
 }
 
@@ -89,9 +90,35 @@ interface HealthObservation {
 }
 
 class LifecycleCondition extends Error {
-  constructor(readonly code: KeylessLifecycleFailureCode) {
+  constructor(
+    readonly code: KeylessLifecycleFailureCode,
+    readonly phase?: KeylessLifecyclePhase,
+  ) {
     super(code);
   }
+}
+
+interface RuntimeConnectionFailure {
+  readonly kind: "runtime-connection-failure";
+  readonly code: "runtime-launch-failed" | "mcp-initialize-failed";
+  readonly pid: number | null;
+  readonly transport: LifecycleRuntimeTransport;
+}
+
+function isRuntimeConnectionFailure(
+  value: unknown,
+): value is RuntimeConnectionFailure {
+  return (
+    isRecord(value) &&
+    value.kind === "runtime-connection-failure" &&
+    (value.code === "runtime-launch-failed" ||
+      value.code === "mcp-initialize-failed") &&
+    (value.pid === null ||
+      (Number.isSafeInteger(value.pid) && (value.pid as number) > 0)) &&
+    isRecord(value.transport) &&
+    typeof value.transport.close === "function" &&
+    typeof value.transport.waitForFinalClose === "function"
+  );
 }
 
 function currentPlatform(): KeylessLifecyclePlatformReport["platform"] {
@@ -278,6 +305,15 @@ async function verifyStagedDigest(
 async function requireLifecycleTools(client: LifecycleMcpClient): Promise<void> {
   const listed = await client.listTools();
   const names = listed.tools.map(({ name }) => name);
+  for (const [name, phase] of [
+    ["swa_spike_health", "initial"],
+    ["swa_spike_bridge_status", "bridge-status"],
+    ["swa_spike_crash", "crash"],
+  ] as const) {
+    if (!names.includes(name)) {
+      throw new LifecycleCondition("mcp-tool-missing", phase);
+    }
+  }
   if (
     names.length !== lifecycleToolNames.length ||
     lifecycleToolNames.some((name) => !names.includes(name))
@@ -449,16 +485,22 @@ export async function connectPackagedRuntime(
     };
     return { client: lifecycleClient, transport };
   } catch {
+    const pid = transport.pid;
+    const code =
+      pid === null
+        ? "runtime-launch-failed"
+        : "mcp-initialize-failed";
     try {
       await transport.close();
     } catch {
-      // The caller receives only the closed initialization failure code.
+      // The harness retains the transport and retries its bounded cleanup.
     }
-    throw new LifecycleCondition(
-      transport.pid === null
-        ? "runtime-launch-failed"
-        : "mcp-initialize-failed",
-    );
+    throw Object.assign(new Error(code), {
+      kind: "runtime-connection-failure" as const,
+      code,
+      pid,
+      transport,
+    });
   }
 }
 
@@ -482,10 +524,12 @@ export async function runKeylessLifecycle(
   dependencies: KeylessLifecycleDependencies = productionDependencies,
 ): Promise<KeylessLifecyclePlatformReport> {
   let platform: KeylessLifecyclePlatformReport["platform"];
+  let platformSupported = true;
   try {
     platform = currentPlatform();
   } catch {
     platform = "darwin-arm64";
+    platformSupported = false;
   }
   const report = initialReport(input, platform);
   const stagedPluginRoots: string[] = [];
@@ -495,32 +539,51 @@ export async function runKeylessLifecycle(
   let initialIdentity: HealthObservation | undefined;
   let recoveryIdentity: HealthObservation | undefined;
 
-  try {
-    if (process.version !== "v24.14.0") {
-      throw new LifecycleCondition("platform-mismatch");
-    }
-    index = parseKeylessPluginFixtureIndex(
-      await dependencies.filesystem.readFixtureIndex(input.fixtureRoot),
+  if (!platformSupported) {
+    recordFailure(
+      report,
+      "fixture",
+      new LifecycleCondition("platform-mismatch"),
+      "platform-mismatch",
     );
-    report.platform = index.platform;
-    report.artifacts = index.runtimeArtifacts;
-    report.phases.initial.observedRuntimeSha256 =
-      index.runtimeArtifacts["0.0.1"].sha256;
-    report.phases.recovery.observedRuntimeSha256 =
-      index.runtimeArtifacts["0.0.1"].sha256;
-    report.phases.update.observedRuntimeSha256 =
-      index.runtimeArtifacts["0.0.2"].sha256;
-    report.windowsStaging =
-      index.platform === "win32-x64"
-        ? { mode: "powershell-acl", passed: true }
-        : { mode: "not-applicable", passed: true };
-  } catch (error) {
-    recordFailure(report, "fixture", mapFixtureFailure(error), "artifact-invalid");
+  } else {
+    try {
+      if (process.version !== "v24.14.0") {
+        throw new LifecycleCondition("platform-mismatch");
+      }
+      index = parseKeylessPluginFixtureIndex(
+        await dependencies.filesystem.readFixtureIndex(input.fixtureRoot),
+      );
+      if (index.platform !== platform) {
+        throw new LifecycleCondition("platform-mismatch");
+      }
+      report.artifacts = index.runtimeArtifacts;
+      report.phases.initial.observedRuntimeSha256 =
+        index.runtimeArtifacts["0.0.1"].sha256;
+      report.phases.recovery.observedRuntimeSha256 =
+        index.runtimeArtifacts["0.0.1"].sha256;
+      report.phases.update.observedRuntimeSha256 =
+        index.runtimeArtifacts["0.0.2"].sha256;
+      report.windowsStaging =
+        index.platform === "win32-x64"
+          ? { mode: "powershell-acl", passed: true }
+          : { mode: "not-applicable", passed: true };
+    } catch (error) {
+      recordFailure(
+        report,
+        "fixture",
+        mapFixtureFailure(error),
+        "artifact-invalid",
+      );
+    }
   }
 
   if (index !== undefined && report.errors.length === 0) {
     let staged: StagedKeylessPlugin | undefined;
     let connected: ConnectedPackagedRuntime | undefined;
+    let activePhase: KeylessLifecyclePhase = "initial";
+    let fallbackCode: KeylessLifecycleFailureCode =
+      "runtime-launch-failed";
     try {
       staged = await dependencies.stagePlugin({
         fixtureRoot: input.fixtureRoot,
@@ -537,8 +600,10 @@ export async function runKeylessLifecycle(
         dependencies.filesystem,
       );
       connected = await dependencies.connectRuntime(staged.launch);
+      fallbackCode = "mcp-initialize-failed";
       await requireLifecycleTools(connected.client);
       const nonce = randomBytes(16).toString("hex");
+      fallbackCode = "mcp-call-invalid";
       const health = await connected.client.callTool({
         name: "swa_spike_health",
         arguments: { nonce },
@@ -555,12 +620,14 @@ export async function runKeylessLifecycle(
         passed: true,
         healthNonceMatched: true,
       };
+      activePhase = "bridge-status";
       const bridge = await connected.client.callTool({
         name: "swa_spike_bridge_status",
         arguments: {},
       });
       parseBridge(bridge.structuredContent);
       report.phases.bridgeStatus.passed = true;
+      activePhase = "crash";
       const crash = await connected.client.callTool({
         name: "swa_spike_crash",
         arguments: {},
@@ -580,7 +647,29 @@ export async function runKeylessLifecycle(
       }
       report.phases.crash.passed = true;
     } catch (error) {
-      recordFailure(report, "initial", error, "runtime-launch-failed");
+      let failure = error;
+      if (isRuntimeConnectionFailure(error)) {
+        if (error.pid !== null && !observedPids.includes(error.pid)) {
+          observedPids.push(error.pid);
+        }
+        if (!error.transport.processOwnershipResolved) {
+          try {
+            await error.transport.close();
+          } catch {
+            // Ownership state below determines the closed failure code.
+          }
+        }
+        failure = new LifecycleCondition(
+          error.transport.processOwnershipResolved
+            ? error.code
+            : "runtime-exit-unobserved",
+        );
+      }
+      const failurePhase =
+        failure instanceof LifecycleCondition && failure.phase !== undefined
+          ? failure.phase
+          : activePhase;
+      recordFailure(report, failurePhase, failure, fallbackCode);
     } finally {
       try {
         await closeIfOwned(connected);

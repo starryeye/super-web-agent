@@ -1,8 +1,10 @@
 import {
   chmod,
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   stat,
   symlink,
@@ -206,7 +208,7 @@ it("rejects an existing report symlink before execution", async () => {
   const target = join(directory, "target.json");
   await writeFile(target, "{}\n", { mode: 0o600 });
   await import("node:fs/promises").then(({ mkdir }) =>
-    mkdir(join(directory, "reports"), { recursive: true }),
+    mkdir(join(directory, "reports"), { recursive: true, mode: 0o700 }),
   );
   await symlink(target, reportPath);
   const execute = vi.fn<RunKeylessLifecycleExecute>();
@@ -218,11 +220,71 @@ it("rejects an existing report symlink before execution", async () => {
   expect((await lstat(reportPath)).isSymbolicLink()).toBe(true);
 });
 
+it("rejects a user-owned report-directory ancestor symlink", async () => {
+  const { directory, fixtureRoot } = await paths();
+  const targetDirectory = join(directory, "target");
+  const linkedDirectory = join(directory, "linked-reports");
+  const reportPath = join(linkedDirectory, "report.json");
+  await mkdir(targetDirectory, { mode: 0o700 });
+  await symlink(targetDirectory, linkedDirectory);
+  const execute = vi.fn<RunKeylessLifecycleExecute>();
+
+  await expect(
+    runKeylessLifecycleCli(
+      [fixtureRoot, reportPath, sourceCommit],
+      {},
+      execute,
+    ),
+  ).rejects.toThrow("unsafe report directory");
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it("rejects an unsafe existing POSIX report directory", async () => {
+  if (process.platform === "win32") return;
+  const { args, directory } = await paths();
+  const reportDirectory = join(directory, "reports");
+  await mkdir(reportDirectory, { mode: 0o755 });
+  await chmod(reportDirectory, 0o755);
+  const execute = vi.fn<RunKeylessLifecycleExecute>();
+
+  await expect(runKeylessLifecycleCli(args, {}, execute)).rejects.toThrow(
+    "report directory must be protected",
+  );
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it("rejects a report directory swapped to a symlink during execution", async () => {
+  const { args, directory, reportPath } = await paths();
+  const reportDirectory = join(directory, "reports");
+  const originalDirectory = join(directory, "reports-original");
+  const replacementDirectory = join(directory, "replacement");
+  await Promise.all([
+    mkdir(reportDirectory, { mode: 0o700 }),
+    mkdir(replacementDirectory, { mode: 0o700 }),
+  ]);
+  const execute = vi.fn<RunKeylessLifecycleExecute>().mockImplementation(
+    async () => {
+      await rename(reportDirectory, originalDirectory);
+      await symlink(replacementDirectory, reportDirectory);
+      return successfulReport();
+    },
+  );
+
+  await expect(runKeylessLifecycleCli(args, {}, execute)).rejects.toThrow(
+    "unsafe report directory",
+  );
+  expect(execute).toHaveBeenCalledOnce();
+  await expect(lstat(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(
+    lstat(join(replacementDirectory, "report.json")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
 it("rejects an existing non-private POSIX report before execution", async () => {
   if (process.platform === "win32") return;
   const { args, directory, reportPath } = await paths();
   await import("node:fs/promises").then(({ mkdir }) =>
-    mkdir(join(directory, "reports"), { recursive: true }),
+    mkdir(join(directory, "reports"), { recursive: true, mode: 0o700 }),
   );
   await writeFile(reportPath, "{}\n", { mode: 0o644 });
   await chmod(reportPath, 0o644);
@@ -245,6 +307,7 @@ it("atomically writes a private POSIX report and returns the platform gate", asy
   expect(JSON.parse(await readFile(reportPath, "utf8"))).toEqual(rejected);
   if (process.platform !== "win32") {
     expect((await stat(reportPath)).mode & 0o777).toBe(0o600);
+    expect((await stat(join(reportPath, ".."))).mode & 0o777).toBe(0o700);
   }
   const entries = await import("node:fs/promises").then(({ readdir }) =>
     readdir(join(reportPath, "..")),

@@ -1,7 +1,8 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   parseKeylessLifecyclePlatformReport,
   type KeylessLifecycleFailureCode,
+  type KeylessLifecyclePhase,
 } from "../src/keyless-lifecycle-report.js";
 import {
   runKeylessLifecycle,
@@ -58,7 +59,10 @@ function fixtureIndex(): KeylessPluginFixtureIndex {
 }
 
 interface Scenario {
-  readonly missingTool?: "swa_spike_health" | "swa_spike_bridge_status";
+  readonly missingTool?:
+    | "swa_spike_health"
+    | "swa_spike_bridge_status"
+    | "swa_spike_crash";
   readonly nonceMismatch?: boolean;
   readonly malformedHealth?: boolean;
   readonly bridgeState?: string;
@@ -250,6 +254,9 @@ function lifecycleDependencies(
               }
             : undefined;
         },
+        async close() {
+          closed = true;
+        },
         async waitForFinalClose() {
           calls.push("wait-crash-exit");
           crashCloseObserved = scenario.finalCloseObserved ?? true;
@@ -319,82 +326,232 @@ it("runs the packaged Runtime lifecycle serially without provider dependencies",
   expect(parseKeylessLifecyclePlatformReport(report)).toEqual(report);
 });
 
+it("rejects an unsupported current platform before fixture or executable phases", async () => {
+  const calls: string[] = [];
+  const dependencies = lifecycleDependencies(calls);
+  const platform = vi
+    .spyOn(process, "platform", "get")
+    .mockReturnValue("linux");
+  const guardedDependencies: KeylessLifecycleDependencies = {
+    ...dependencies,
+    filesystem: {
+      ...dependencies.filesystem,
+      async readFixtureIndex(fixtureRoot) {
+        calls.push("read-fixture");
+        return dependencies.filesystem.readFixtureIndex(fixtureRoot);
+      },
+    },
+  };
+
+  try {
+    const report = await runKeylessLifecycle(
+      {
+        fixtureRoot: "/absolute/fixture",
+        sourceCommit,
+      },
+      guardedDependencies,
+    );
+
+    expect(calls).toEqual(["inspect-residue"]);
+    expect(report.errors).toEqual([
+      { code: "platform-mismatch", phase: "fixture" },
+    ]);
+    expect(parseKeylessLifecyclePlatformReport(report)).toEqual(report);
+  } finally {
+    platform.mockRestore();
+  }
+});
+
+it("rejects a fixture platform different from the supported current platform", async () => {
+  const calls: string[] = [];
+  const dependencies = lifecycleDependencies(calls);
+  const index = fixtureIndex();
+  index.platform =
+    index.platform === "darwin-arm64" ? "win32-x64" : "darwin-arm64";
+  const guardedDependencies: KeylessLifecycleDependencies = {
+    ...dependencies,
+    filesystem: {
+      ...dependencies.filesystem,
+      async readFixtureIndex() {
+        return index;
+      },
+    },
+  };
+
+  const report = await runKeylessLifecycle(
+    {
+      fixtureRoot: "/absolute/fixture",
+      sourceCommit,
+    },
+    guardedDependencies,
+  );
+
+  expect(calls).toEqual(["inspect-residue"]);
+  expect(report.errors).toEqual([
+    { code: "platform-mismatch", phase: "fixture" },
+  ]);
+  expect(parseKeylessLifecyclePlatformReport(report)).toEqual(report);
+});
+
+it("retains a rejected connection PID and refuses acceptance when close stays unobserved", async () => {
+  const calls: string[] = [];
+  const dependencies = lifecycleDependencies(calls);
+  let inspectedPids: readonly number[] = [];
+  const escapedTransport = {
+    processOwnershipResolved: false,
+    exitObservation: undefined,
+    async waitForFinalClose() {
+      return false;
+    },
+    async close() {
+      calls.push("close-rejected-connect");
+      throw new Error("raw bounded close failure");
+    },
+  };
+  const guardedDependencies: KeylessLifecycleDependencies = {
+    ...dependencies,
+    async connectRuntime() {
+      calls.push("connect-0.0.1");
+      throw Object.assign(new Error("raw initialize failure"), {
+        kind: "runtime-connection-failure",
+        code: "mcp-initialize-failed",
+        pid: 49_001,
+        transport: escapedTransport,
+      });
+    },
+    processObservation: {
+      async inspectResidue({ observedPids }) {
+        calls.push("inspect-residue");
+        inspectedPids = observedPids;
+        return {
+          stagedPluginRemoved: true,
+          noLiveRuntime: false,
+          swaOwnedResidueCount: 0,
+        };
+      },
+    },
+  };
+
+  const report = await runKeylessLifecycle(
+    {
+      fixtureRoot: "/absolute/fixture",
+      sourceCommit,
+    },
+    guardedDependencies,
+  );
+
+  expect(calls).toEqual([
+    "stage-0.0.1",
+    "connect-0.0.1",
+    "close-rejected-connect",
+    "cleanup-0.0.1",
+    "inspect-residue",
+  ]);
+  expect(inspectedPids).toEqual([49_001]);
+  expect(report.errors).toEqual([
+    { code: "runtime-exit-unobserved", phase: "initial" },
+  ]);
+  expect(JSON.stringify(report)).not.toContain("raw");
+  expect(parseKeylessLifecyclePlatformReport(report)).toEqual(report);
+});
+
 it.each<{
   name: string;
   scenario: Scenario;
   code: KeylessLifecycleFailureCode;
+  phase: KeylessLifecyclePhase;
 }>([
   {
     name: "missing health tool",
     scenario: { missingTool: "swa_spike_health" },
     code: "mcp-tool-missing",
+    phase: "initial",
   },
   {
     name: "missing bridge tool",
     scenario: { missingTool: "swa_spike_bridge_status" },
     code: "mcp-tool-missing",
+    phase: "bridge-status",
+  },
+  {
+    name: "missing crash tool",
+    scenario: { missingTool: "swa_spike_crash" },
+    code: "mcp-tool-missing",
+    phase: "crash",
   },
   {
     name: "health nonce mismatch",
     scenario: { nonceMismatch: true },
     code: "mcp-call-invalid",
+    phase: "initial",
   },
   {
     name: "malformed structured content",
     scenario: { malformedHealth: true },
     code: "mcp-call-invalid",
+    phase: "initial",
   },
   {
     name: "installed bridge state",
     scenario: { bridgeState: "connected" },
     code: "mcp-call-invalid",
+    phase: "bridge-status",
   },
   {
     name: "crash exit code other than 86",
     scenario: { crashExitCode: 1 },
     code: "runtime-exit-unobserved",
+    phase: "crash",
   },
   {
     name: "unobserved final close",
     scenario: { finalCloseObserved: false },
     code: "runtime-exit-unobserved",
+    phase: "crash",
   },
   {
     name: "recovery PID reuse",
     scenario: { recoveryPidReuse: true },
     code: "recovery-failed",
+    phase: "recovery",
   },
   {
     name: "recovery Runtime Session reuse",
     scenario: { recoverySessionReuse: true },
     code: "recovery-failed",
+    phase: "recovery",
   },
   {
     name: "stale update build",
     scenario: { updateBuildId: "0.0.1" },
     code: "update-not-applied",
+    phase: "update",
   },
   {
     name: "digest mutation before launch",
     scenario: { mutateDigestBeforeLaunch: true },
     code: "artifact-invalid",
+    phase: "initial",
   },
   {
     name: "cleanup failure",
     scenario: { cleanupFailure: true },
     code: "residue-detected",
+    phase: "removal",
   },
   {
     name: "residue after removal",
     scenario: { residue: true },
     code: "residue-detected",
+    phase: "removal",
   },
   {
     name: "attempted inherited provider credential",
     scenario: { providerCredential: "must-not-escape" },
     code: "runtime-launch-failed",
+    phase: "initial",
   },
-])("returns one sanitized strict report for $name", async ({ scenario, code }) => {
+])("returns one sanitized strict report for $name", async ({ scenario, code, phase }) => {
   const calls: string[] = [];
   const report = await runKeylessLifecycle(
     {
@@ -405,7 +562,7 @@ it.each<{
   );
 
   expect(report.errors).toHaveLength(1);
-  expect(report.errors[0]?.code).toBe(code);
+  expect(report.errors[0]).toEqual({ code, phase });
   expect(Object.keys(report.errors[0] ?? {}).sort()).toEqual(["code", "phase"]);
   expect(parseKeylessLifecyclePlatformReport(report)).toEqual(report);
   const serialized = JSON.stringify(report);

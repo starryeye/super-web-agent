@@ -1,13 +1,13 @@
 import {
-  chmod,
   lstat,
   mkdir,
   open,
+  realpath,
   rename,
   rm,
 } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { isAbsolute, dirname, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   runKeylessLifecycle,
@@ -25,6 +25,14 @@ const usage =
 export type RunKeylessLifecycleExecute = (
   input: RunKeylessLifecycleInput,
 ) => Promise<KeylessLifecyclePlatformReport>;
+
+interface ProtectedReportTarget {
+  readonly requestedPath: string;
+  readonly canonicalDirectory: string;
+  readonly canonicalPath: string;
+  readonly directoryDevice: number;
+  readonly directoryInode: number;
+}
 
 function isMissingPath(error: unknown): boolean {
   return (
@@ -70,25 +78,142 @@ async function validateExistingReport(path: string): Promise<void> {
   if (reportStat.isSymbolicLink() || !reportStat.isFile()) {
     throw new Error("unsafe report path");
   }
+  if (
+    process.platform !== "win32" &&
+    process.getuid !== undefined &&
+    reportStat.uid !== process.getuid()
+  ) {
+    throw new Error("unsafe report path");
+  }
   if (process.platform !== "win32" && (reportStat.mode & 0o777) !== 0o600) {
     throw new Error("report permissions must be 0600");
   }
 }
 
+async function validateReportAncestorChain(directory: string): Promise<void> {
+  const uid =
+    process.platform === "win32" || process.getuid === undefined
+      ? undefined
+      : process.getuid();
+  let current = resolve(directory);
+  while (true) {
+    try {
+      const entry = await lstat(current);
+      if (entry.isSymbolicLink()) {
+        if (uid === undefined || entry.uid === uid) {
+          throw new Error("unsafe report directory");
+        }
+        return;
+      }
+      if (!entry.isDirectory()) {
+        throw new Error("unsafe report directory");
+      }
+      if (uid !== undefined) {
+        if (entry.uid !== uid) return;
+        if ((entry.mode & 0o022) !== 0) {
+          throw new Error("unsafe report directory");
+        }
+      }
+    } catch (error) {
+      if (!isMissingPath(error)) throw error;
+    }
+    const parent = dirname(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+
+async function prepareProtectedReportTarget(
+  requestedPath: string,
+): Promise<ProtectedReportTarget> {
+  const requestedDirectory = dirname(requestedPath);
+  await validateReportAncestorChain(requestedDirectory);
+  if (process.platform === "win32") {
+    try {
+      const directoryStat = await lstat(requestedDirectory);
+      if (
+        directoryStat.isSymbolicLink() ||
+        !directoryStat.isDirectory()
+      ) {
+        throw new Error("unsafe report directory");
+      }
+    } catch (error) {
+      if (isMissingPath(error)) {
+        throw new Error("report directory must be protected");
+      }
+      throw error;
+    }
+  } else {
+    await mkdir(requestedDirectory, { recursive: true, mode: 0o700 });
+  }
+  await validateReportAncestorChain(requestedDirectory);
+  const directoryStat = await lstat(requestedDirectory);
+  if (
+    directoryStat.isSymbolicLink() ||
+    !directoryStat.isDirectory()
+  ) {
+    throw new Error("unsafe report directory");
+  }
+  if (
+    process.platform !== "win32" &&
+    (process.getuid === undefined ||
+      directoryStat.uid !== process.getuid() ||
+      (directoryStat.mode & 0o777) !== 0o700)
+  ) {
+    throw new Error("report directory must be protected");
+  }
+  const canonicalDirectory = await realpath(requestedDirectory);
+  const canonicalStat = await lstat(canonicalDirectory);
+  if (
+    canonicalStat.isSymbolicLink() ||
+    !canonicalStat.isDirectory() ||
+    canonicalStat.dev !== directoryStat.dev ||
+    canonicalStat.ino !== directoryStat.ino
+  ) {
+    throw new Error("unsafe report directory");
+  }
+  return {
+    requestedPath,
+    canonicalDirectory,
+    canonicalPath: join(canonicalDirectory, basename(requestedPath)),
+    directoryDevice: canonicalStat.dev,
+    directoryInode: canonicalStat.ino,
+  };
+}
+
+async function requireSameReportDirectory(
+  prior: ProtectedReportTarget,
+): Promise<ProtectedReportTarget> {
+  const current = await prepareProtectedReportTarget(prior.requestedPath);
+  if (
+    current.canonicalDirectory !== prior.canonicalDirectory ||
+    current.directoryDevice !== prior.directoryDevice ||
+    current.directoryInode !== prior.directoryInode
+  ) {
+    throw new Error("unsafe report directory");
+  }
+  return current;
+}
+
 async function writePrivateReport(
-  path: string,
+  target: ProtectedReportTarget,
   report: KeylessLifecyclePlatformReport,
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await validateExistingReport(path);
-  const temporaryPath = `${path}.tmp-${randomBytes(16).toString("hex")}`;
+  await validateExistingReport(target.canonicalPath);
+  const temporaryPath = join(
+    target.canonicalDirectory,
+    `${basename(target.canonicalPath)}.tmp-${randomBytes(16).toString("hex")}`,
+  );
   const handle = await open(temporaryPath, "wx", 0o600);
   try {
     await handle.writeFile(`${JSON.stringify(report, null, 2)}\n`, "utf8");
+    if (process.platform !== "win32") await handle.chmod(0o600);
     await handle.sync();
     await handle.close();
-    if (process.platform !== "win32") await chmod(temporaryPath, 0o600);
-    await rename(temporaryPath, path);
+    await requireSameReportDirectory(target);
+    await rename(temporaryPath, target.canonicalPath);
+    await requireSameReportDirectory(target);
+    await validateExistingReport(target.canonicalPath);
   } finally {
     await handle.close().catch(() => undefined);
     await rm(temporaryPath, { force: true }).catch(() => undefined);
@@ -102,14 +227,17 @@ export async function runKeylessLifecycleCli(
 ): Promise<number> {
   void environment;
   const { fixtureRoot, reportPath, sourceCommit } = parseArguments(args);
-  await validateExistingReport(reportPath);
+  const target = await prepareProtectedReportTarget(reportPath);
+  await validateExistingReport(target.canonicalPath);
   const report = parseKeylessLifecyclePlatformReport(
     await execute({ fixtureRoot, sourceCommit }),
   );
   if (report.sourceCommit !== sourceCommit) {
     throw new Error("lifecycle report source commit mismatch");
   }
-  await writePrivateReport(reportPath, report);
+  const stableTarget = await requireSameReportDirectory(target);
+  await validateExistingReport(stableTarget.canonicalPath);
+  await writePrivateReport(stableTarget, report);
   process.stdout.write(`${reportPath}\n`);
   return evaluateKeylessLifecyclePlatformReport(report).state === "accepted"
     ? 0
