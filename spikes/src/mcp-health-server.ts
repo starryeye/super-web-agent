@@ -7,9 +7,11 @@ export interface RuntimeIdentity {
   readonly runtimeBuildId: string;
 }
 
-export interface HealthServerLifecycle {}
+export interface HealthServerLifecycle {
+  readonly onCrashRequested?: () => void;
+}
 
-export function buildHealthServer(identity: RuntimeIdentity, _lifecycle?: HealthServerLifecycle): McpServer {
+export function buildHealthServer(identity: RuntimeIdentity, lifecycle?: HealthServerLifecycle): McpServer {
   const server = new McpServer({
     name: "super-web-agent-runtime-spike",
     version: "0.0.0-spike",
@@ -57,6 +59,38 @@ export function buildHealthServer(identity: RuntimeIdentity, _lifecycle?: Health
         runtime: "ready" as const,
         bridge: { state: "not-installed" as const },
       };
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(output) }],
+        structuredContent: output,
+      };
+    },
+  );
+  server.registerTool(
+    "swa_spike_crash",
+    {
+      description: "Schedule the disposable SWA Runtime to exit for lifecycle evidence.",
+      inputSchema: {},
+      outputSchema: {
+        status: z.literal("crash-scheduled"),
+        pid: z.number().int().positive(),
+      },
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    async () => {
+      const output = {
+        status: "crash-scheduled" as const,
+        pid: process.pid,
+      };
+      if (lifecycle?.onCrashRequested !== undefined) {
+        lifecycle.onCrashRequested();
+      } else {
+        setTimeout(() => process.exit(86), 50).unref();
+      }
       return {
         content: [{ type: "text" as const, text: JSON.stringify(output) }],
         structuredContent: output,

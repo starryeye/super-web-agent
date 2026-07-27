@@ -9,6 +9,7 @@
     "verify": "pnpm build && pnpm typecheck && pnpm test",
     "build:runtime": "pnpm build && node dist/scripts/build-runtime.js",
     "build:keyless-plugin-fixtures": "pnpm build && node dist/scripts/build-keyless-plugin-fixtures.js",
+    "run:keyless-lifecycle": "pnpm build && node dist/scripts/run-keyless-lifecycle.js",
     "write:artifact-decision": "pnpm build && node dist/scripts/write-artifact-decision.js",
     "write:keyless-lifecycle-decision": "pnpm build && node dist/scripts/write-keyless-lifecycle-decision.js"
   },

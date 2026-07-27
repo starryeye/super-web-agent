@@ -8,6 +8,7 @@
   "scripts": {
     "spikes:build": "pnpm -C spikes build",
     "spikes:build-keyless-plugin-fixtures": "pnpm -C spikes build:keyless-plugin-fixtures",
+    "spikes:run-keyless-lifecycle": "pnpm -C spikes run:keyless-lifecycle",
     "spikes:test": "pnpm -C spikes test",
     "spikes:typecheck": "pnpm -C spikes typecheck",
     "spikes:verify": "pnpm -C spikes verify",

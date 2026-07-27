@@ -1,7 +1,9 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { resolve } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { buildHealthServer } from "../src/mcp-health-server.js";
 
 let client: Client | undefined;
 
@@ -65,4 +67,53 @@ it("returns process identity and the deterministic pre-bridge state", async () =
     runtime: "ready",
     bridge: { state: "not-installed" },
   });
+});
+
+it("acknowledges the closed crash tool through the safe lifecycle callback", async () => {
+  const onCrashRequested = vi.fn();
+  const server = buildHealthServer(
+    {
+      runtimeSessionId: "rt_0123456789abcdef0123456789abcdef",
+      runtimeBuildId: "direct-test",
+    },
+    { onCrashRequested },
+  );
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const crashClient = new Client({
+    name: "super-web-agent-crash-tool-test",
+    version: "0.0.0",
+  });
+
+  try {
+    await Promise.all([
+      server.connect(serverTransport),
+      crashClient.connect(clientTransport),
+    ]);
+    const tools = await crashClient.listTools();
+    expect(tools.tools.map(({ name }) => name)).toEqual([
+      "swa_spike_health",
+      "swa_spike_bridge_status",
+      "swa_spike_crash",
+    ]);
+    expect(tools.tools[2]?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: false,
+      openWorldHint: false,
+    });
+
+    const crash = await crashClient.callTool({
+      name: "swa_spike_crash",
+      arguments: {},
+    });
+
+    expect(crash.structuredContent).toEqual({
+      status: "crash-scheduled",
+      pid: process.pid,
+    });
+    expect(onCrashRequested).toHaveBeenCalledOnce();
+  } finally {
+    await crashClient.close();
+    await server.close();
+  }
 });
