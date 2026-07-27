@@ -4,6 +4,8 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
+  realpath,
   rename,
   rm,
   stat,
@@ -11,9 +13,10 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  isTrustedReportSystemSymlink,
   runKeylessLifecycleCli,
   type RunKeylessLifecycleExecute,
 } from "../scripts/run-keyless-lifecycle.js";
@@ -239,6 +242,66 @@ it("rejects a user-owned report-directory ancestor symlink", async () => {
   expect(execute).not.toHaveBeenCalled();
 });
 
+it("trusts only an immutable root-owned system symlink", async () => {
+  expect(
+    isTrustedReportSystemSymlink({
+      currentUid: 501,
+      symlinkUid: 502,
+      parentUid: 0,
+      parentMode: 0o755,
+    }),
+  ).toBe(false);
+  expect(
+    isTrustedReportSystemSymlink({
+      currentUid: 501,
+      symlinkUid: 501,
+      parentUid: 0,
+      parentMode: 0o755,
+    }),
+  ).toBe(false);
+  expect(
+    isTrustedReportSystemSymlink({
+      currentUid: 501,
+      symlinkUid: 0,
+      parentUid: 0,
+      parentMode: 0o755,
+    }),
+  ).toBe(true);
+  expect(
+    isTrustedReportSystemSymlink({
+      currentUid: 501,
+      symlinkUid: 0,
+      parentUid: 0,
+      parentMode: 0o777,
+    }),
+  ).toBe(false);
+  expect(
+    isTrustedReportSystemSymlink({
+      currentUid: 0,
+      symlinkUid: 0,
+      parentUid: 0,
+      parentMode: 0o755,
+    }),
+  ).toBe(false);
+});
+
+it("canonicalizes the trusted macOS /var system alias", async () => {
+  if (process.platform !== "darwin") return;
+  const { args, reportPath } = await paths();
+  expect((await lstat("/var")).isSymbolicLink()).toBe(true);
+  expect(reportPath.startsWith("/var/")).toBe(true);
+  const execute = vi.fn<RunKeylessLifecycleExecute>().mockResolvedValue(
+    successfulReport(),
+  );
+
+  await expect(runKeylessLifecycleCli(args, {}, execute)).resolves.toBe(0);
+
+  expect(await realpath(dirname(reportPath))).toMatch(/^\/private\/var\//);
+  expect(JSON.parse(await readFile(reportPath, "utf8"))).toEqual(
+    successfulReport(),
+  );
+});
+
 it("rejects an unsafe existing POSIX report directory", async () => {
   if (process.platform === "win32") return;
   const { args, directory } = await paths();
@@ -277,6 +340,40 @@ it("rejects a report directory swapped to a symlink during execution", async () 
   await expect(lstat(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
   await expect(
     lstat(join(replacementDirectory, "report.json")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("does not publish into a report directory replaced during publication", async () => {
+  const { args, directory, reportPath } = await paths();
+  const reportDirectory = dirname(reportPath);
+  const originalDirectory = join(directory, "reports-original");
+  await mkdir(reportDirectory, { mode: 0o700 });
+  const execute = vi.fn<RunKeylessLifecycleExecute>().mockResolvedValue(
+    successfulReport(),
+  );
+  const swapped = (async () => {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const entries = await readdir(reportDirectory);
+      if (entries.some((entry) => entry.includes(".tmp-"))) {
+        await rename(reportDirectory, originalDirectory);
+        await mkdir(reportDirectory, { mode: 0o700 });
+        return;
+      }
+      await new Promise((resolvePoll) => setTimeout(resolvePoll, 1));
+    }
+    throw new Error("timed out waiting for report publication");
+  })();
+
+  const run = runKeylessLifecycleCli(args, {}, execute);
+  await expect(Promise.all([run, swapped])).rejects.toThrow(
+    "unsafe report directory",
+  );
+
+  expect(execute).toHaveBeenCalledOnce();
+  await expect(lstat(reportPath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(
+    lstat(join(originalDirectory, "report.json")),
   ).rejects.toMatchObject({ code: "ENOENT" });
 });
 
